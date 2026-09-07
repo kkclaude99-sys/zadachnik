@@ -1,0 +1,1537 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Задачник — Море трафика</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&display=swap" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  html, body { background: #12151B; margin: 0; padding: 0; height: 100%; }
+  #root { min-height: 100vh; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: #2A3040; border-radius: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react" data-type="module">
+
+const { useState, useEffect, useMemo, useCallback, useRef } = React;
+
+/* ---------------------------------------------------------
+   Токены
+--------------------------------------------------------- */
+const COLORS = {
+  bg: "#12151B",
+  bgHeader: "#161A21",
+  surface: "#1B2029",
+  surfaceRaised: "#212734",
+  border: "#2A3040",
+  borderSoft: "#232935",
+  text: "#E7E9EE",
+  textDim: "#9BA3B4",
+  textFaint: "#616B7E",
+  accent: "#5B8DEF",
+  accentSoft: "rgba(91,141,239,0.14)",
+  success: "#49B287",
+  successSoft: "rgba(73,178,135,0.14)",
+  danger: "#E06767",
+  dangerSoft: "rgba(224,103,103,0.14)",
+  blocked: "#E8B84B",
+  blockedSoft: "rgba(232,184,75,0.14)",
+  deferred: "#8B90C4",
+  deferredSoft: "rgba(139,144,196,0.14)",
+  cancelled: "#6B7284",
+  cancelledSoft: "rgba(107,114,132,0.14)",
+};
+
+const PEOPLE = {
+  sasha: { name: "Саша", color: "#E0954F", initial: "С" },
+  kostya: { name: "Костя", color: "#5B8DEF", initial: "К" },
+  nikita: { name: "Никита", color: "#C77DFF", initial: "Н" },
+};
+const PEOPLE_LIST = ["sasha", "kostya", "nikita"];
+
+const FREQ = {
+  daily: { label: "Каждый день", short: "ежедн." },
+  weekly: { label: "Каждую неделю", short: "еженед." },
+  monthly: { label: "Каждый месяц", short: "ежемес." },
+};
+
+const STATUS = {
+  active: { label: "Активна", color: COLORS.text },
+  deferred: { label: "Отложена", color: COLORS.deferred },
+  done: { label: "Выполнена", color: COLORS.success },
+  cancelled: { label: "Отменена", color: COLORS.cancelled },
+};
+
+const PROJECT_PALETTE = ["#4FB6C9", "#F2B705", "#E85D75", "#8BC34A", "#9B8AFB", "#5FD3A0", "#F2946B", "#6EC1E4", "#D889C4", "#B7CE63"];
+const DEFAULT_PROJECTS = [
+  { id: "bar", code: "БАР", name: "Биржа авитологов", color: "#4FB6C9" },
+  { id: "ya", code: "ЯА", name: "Я — Авитолог", color: "#F2B705" },
+  { id: "par", code: "ПРТ", name: "Партнёрка", color: "#E85D75" },
+];
+
+/* ---------------------------------------------------------
+   Утилиты дат
+--------------------------------------------------------- */
+function fmtLocal(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+function todayStr() {
+  return fmtLocal(new Date());
+}
+function parseDate(s) {
+  const [y, m, d] = s.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+function addToDate(dateStr, freq) {
+  const base = dateStr ? parseDate(dateStr) : new Date();
+  const d = new Date(base);
+  if (freq === "daily") d.setDate(d.getDate() + 1);
+  else if (freq === "weekly") d.setDate(d.getDate() + 7);
+  else if (freq === "monthly") d.setMonth(d.getMonth() + 1);
+  return fmtLocal(d);
+}
+const MONTHS_SHORT = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
+function humanDate(dateStr) {
+  if (!dateStr) return null;
+  const d = parseDate(dateStr);
+  const t = parseDate(todayStr());
+  const diffDays = Math.round((d - t) / 86400000);
+  if (diffDays === 0) return "сегодня";
+  if (diffDays === 1) return "завтра";
+  if (diffDays === -1) return "вчера";
+  return `${d.getDate()} ${MONTHS_SHORT[d.getMonth()]}`;
+}
+function humanDateTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const t = new Date();
+  const sameDay = d.toDateString() === t.toDateString();
+  const time = d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  if (sameDay) return `сегодня, ${time}`;
+  return `${d.getDate()} ${MONTHS_SHORT[d.getMonth()]}, ${time}`;
+}
+function uid(prefix) {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/* ---------------------------------------------------------
+   Supabase — общее хранилище задач и проектов
+--------------------------------------------------------- */
+const SUPABASE_URL = "https://uhvgoragwdcdvzvnefvu.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_o62eggkRQguhEi7VbqL7Bw_z2TX5wvj";
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+function rowToTask(r) {
+  return {
+    id: r.id, title: r.title, desc: r.description || "", assignee: r.assignee,
+    projectId: r.project_id, dueDate: r.due_date, recurring: r.recurring,
+    status: r.status, progress: r.progress || 0, blocked: r.blocked,
+    history: r.history || [], comments: r.comments || [],
+    createdAt: r.created_at, completedAt: r.completed_at,
+  };
+}
+function taskToRow(t) {
+  return {
+    id: t.id, title: t.title, description: t.desc, assignee: t.assignee,
+    project_id: t.projectId, due_date: t.dueDate, recurring: t.recurring,
+    status: t.status, progress: t.progress, blocked: t.blocked,
+    history: t.history, comments: t.comments, completed_at: t.completedAt,
+  };
+}
+function rowToProject(r) {
+  return { id: r.id, code: r.code, name: r.name, color: r.color };
+}
+function projectToRow(p) {
+  return { id: p.id, code: p.code, name: p.name, color: p.color };
+}
+async function persistTask(task) {
+  const { error } = await sb.from("tasks").upsert(taskToRow(task));
+  if (error) console.error("Не удалось сохранить задачу", error);
+}
+async function removeTaskRow(id) {
+  const { error } = await sb.from("tasks").delete().eq("id", id);
+  if (error) console.error("Не удалось удалить задачу", error);
+}
+async function persistProjectRow(project) {
+  const { error } = await sb.from("projects").upsert(projectToRow(project));
+  if (error) console.error("Не удалось сохранить проект", error);
+}
+function loadCurrentUser() {
+  return localStorage.getItem("zadachnik_user") || null;
+}
+function persistCurrentUser(v) {
+  localStorage.setItem("zadachnik_user", v);
+}
+
+/* ---------------------------------------------------------
+   Иконки — компактный набор вместо lucide-react
+--------------------------------------------------------- */
+function Icon({ name, size = 16, color = "currentColor", style, className }) {
+  const common = {
+    width: size, height: size, viewBox: "0 0 24 24", fill: "none",
+    stroke: color, strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round",
+    style, className,
+  };
+  switch (name) {
+    case "plus": return <svg {...common}><path d="M12 5v14M5 12h14" /></svg>;
+    case "chevronDown": return <svg {...common}><path d="M6 9l6 6 6-6" /></svg>;
+    case "chevronRight": return <svg {...common}><path d="M9 6l6 6-6 6" /></svg>;
+    case "message": return <svg {...common}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>;
+    case "repeat": return <svg {...common}><path d="M17 1l4 4-4 4" /><path d="M3 11V9a4 4 0 0 1 4-4h14" /><path d="M7 23l-4-4 4-4" /><path d="M21 13v2a4 4 0 0 1-4 4H3" /></svg>;
+    case "calendar": return <svg {...common}><rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" /></svg>;
+    case "x": return <svg {...common}><path d="M18 6L6 18M6 6l12 12" /></svg>;
+    case "trash": return <svg {...common}><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6" /></svg>;
+    case "pencil": return <svg {...common}><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>;
+    case "alertTriangle": return <svg {...common}><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" /><path d="M12 9v4M12 17h.01" /></svg>;
+    case "circle": return <svg {...common}><circle cx="12" cy="12" r="9" /></svg>;
+    case "checkCircle": return <svg {...common}><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /><path d="M22 4 12 14.01l-3-3" /></svg>;
+    case "flag": return <svg {...common}><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" /><line x1="4" y1="22" x2="4" y2="15" /></svg>;
+    case "inbox": return <svg {...common}><path d="M22 12h-6l-2 3h-4l-2-3H2" /><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11Z" /></svg>;
+    case "loader": return <svg {...common}><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>;
+    case "user": return <svg {...common}><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>;
+    case "archive": return <svg {...common}><rect x="2" y="3" width="20" height="5" rx="1" /><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8M10 12h4" /></svg>;
+    case "ban": return <svg {...common}><circle cx="12" cy="12" r="10" /><line x1="4.93" y1="4.93" x2="19.07" y2="19.07" /></svg>;
+    case "check": return <svg {...common}><path d="M20 6 9 17l-5-5" /></svg>;
+    default: return null;
+  }
+}
+
+/* ---------------------------------------------------------
+   Popover — общий выпадающий контейнер с закрытием по клику вовне
+--------------------------------------------------------- */
+function Popover({ trigger, children, align = "left", open, onOpenChange }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    function onDoc(e) {
+      if (ref.current && !ref.current.contains(e.target)) onOpenChange(false);
+    }
+    if (open) document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open, onOpenChange]);
+
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      {trigger}
+      {open && (
+        <div
+          style={{
+            position: "absolute", [align]: 0, top: "calc(100% + 6px)",
+            background: COLORS.surfaceRaised, border: `1px solid ${COLORS.border}`,
+            borderRadius: 12, padding: 6, zIndex: 40, minWidth: 190,
+            boxShadow: "0 10px 28px rgba(0,0,0,0.4)",
+          }}
+        >
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PopoverItem({ onClick, active, children }) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-2 w-full"
+      style={{
+        padding: "7px 8px", borderRadius: 8, fontSize: 13.5, fontWeight: 600,
+        color: COLORS.text, background: active ? COLORS.accentSoft : "transparent",
+        textAlign: "left",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+/* ---------------------------------------------------------
+   Мелкие переиспользуемые элементы
+--------------------------------------------------------- */
+function Avatar({ personKey, size = 22 }) {
+  const p = PEOPLE[personKey];
+  if (!p) {
+    return (
+      <div
+        style={{
+          width: size, height: size, borderRadius: "50%",
+          border: `1.5px dashed ${COLORS.textFaint}`, flexShrink: 0,
+        }}
+      />
+    );
+  }
+  return (
+    <div
+      title={p.name}
+      style={{
+        width: size, height: size, borderRadius: "50%",
+        background: p.color, color: "#111318",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        fontSize: size * 0.46, fontWeight: 700, flexShrink: 0,
+      }}
+    >
+      {p.initial}
+    </div>
+  );
+}
+
+function ProjectDot({ color, size = 9 }) {
+  return <span style={{ width: size, height: size, borderRadius: "50%", background: color, flexShrink: 0, display: "inline-block" }} />;
+}
+
+function Pill({ children, color, bg, style, onClick, title }) {
+  return (
+    <span
+      onClick={onClick}
+      title={title}
+      className="inline-flex items-center gap-1 rounded-full"
+      style={{
+        fontSize: 12, fontWeight: 600, padding: "2px 8px",
+        color: color || COLORS.textDim, background: bg || "transparent",
+        border: bg ? "none" : `1px solid ${COLORS.border}`,
+        cursor: onClick ? "pointer" : "default", whiteSpace: "nowrap",
+        ...style,
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+/* ---------------------------------------------------------
+   Выбор исполнителя для фильтра — можно отметить несколько сразу
+--------------------------------------------------------- */
+function AssigneeFilterDropdown({ value, onChange }) {
+  // value: массив ключей ('sasha'|'kostya'|'nikita'); пустой массив = все
+  const [open, setOpen] = useState(false);
+
+  function toggle(k) {
+    if (value.includes(k)) onChange(value.filter((x) => x !== k));
+    else onChange([...value, k]);
+  }
+
+  const label = value.length === 0 ? "Все" : value.map((k) => PEOPLE[k].name).join(", ");
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={setOpen}
+      trigger={
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="flex items-center gap-1.5"
+          style={{
+            border: `1px solid ${COLORS.border}`, borderRadius: 999,
+            padding: value.length > 0 ? "3px 10px 3px 3px" : "5px 10px",
+            background: COLORS.surface, maxWidth: 220,
+          }}
+        >
+          {value.length === 0 ? (
+            <Icon name="user" size={14} color={COLORS.textDim} />
+          ) : (
+            <div className="flex items-center" style={{ flexShrink: 0 }}>
+              {value.map((k, i) => (
+                <div key={k} style={{ marginLeft: i === 0 ? 0 : -6, zIndex: value.length - i, borderRadius: "50%", border: `1.5px solid ${COLORS.surface}` }}>
+                  <Avatar personKey={k} size={20} />
+                </div>
+              ))}
+            </div>
+          )}
+          <span
+            style={{
+              color: value.length > 0 ? COLORS.text : COLORS.textDim, fontSize: 13, fontWeight: 600,
+              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+            }}
+          >
+            {label}
+          </span>
+          <Icon name="chevronDown" size={13} color={COLORS.textFaint} style={{ flexShrink: 0 }} />
+        </button>
+      }
+    >
+      <PopoverItem active={value.length === 0} onClick={() => onChange([])}>
+        <Icon name="user" size={16} color={COLORS.textDim} /> Все
+      </PopoverItem>
+      <div style={{ borderTop: `1px solid ${COLORS.borderSoft}`, margin: "4px 0" }} />
+      {PEOPLE_LIST.map((k) => (
+        <button
+          key={k}
+          onClick={() => toggle(k)}
+          className="flex items-center gap-2 w-full"
+          style={{
+            padding: "7px 8px", borderRadius: 8, fontSize: 13.5, fontWeight: 600,
+            color: COLORS.text, background: value.includes(k) ? COLORS.accentSoft : "transparent",
+            textAlign: "left",
+          }}
+        >
+          <Avatar personKey={k} size={20} />
+          <span style={{ flex: 1 }}>{PEOPLE[k].name}</span>
+          {value.includes(k) && <Icon name="check" size={15} color={COLORS.accent} />}
+        </button>
+      ))}
+      <div style={{ borderTop: `1px solid ${COLORS.borderSoft}`, marginTop: 4, paddingTop: 4 }}>
+        <PopoverItem onClick={() => setOpen(false)}>
+          <span style={{ color: COLORS.accent, width: "100%", textAlign: "center" }}>Готово</span>
+        </PopoverItem>
+      </div>
+    </Popover>
+  );
+}
+
+/* ---------------------------------------------------------
+   Выбор проекта — дропдаун с созданием нового маркера прямо внутри
+--------------------------------------------------------- */
+function ProjectDropdown({ projects, value, onChange, onCreate, allowAll }) {
+  const [open, setOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [code, setCode] = useState("");
+  const [name, setName] = useState("");
+  const [color, setColor] = useState(PROJECT_PALETTE[projects.length % PROJECT_PALETTE.length]);
+
+  const current = projects.find((p) => p.id === value);
+  const label = current ? current.code : allowAll ? "Все проекты" : "Без проекта";
+
+  function resetForm() {
+    setCreating(false);
+    setCode("");
+    setName("");
+    setColor(PROJECT_PALETTE[projects.length % PROJECT_PALETTE.length]);
+  }
+  function submitCreate() {
+    if (!code.trim()) return;
+    const project = { id: uid("p"), code: code.trim().toUpperCase(), name: name.trim() || code.trim(), color };
+    onCreate(project);
+    onChange(project.id);
+    resetForm();
+    setOpen(false);
+  }
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(v) => { setOpen(v); if (!v) resetForm(); }}
+      trigger={
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="flex items-center gap-1.5"
+          style={{
+            border: `1px solid ${current ? current.color : COLORS.border}`, borderRadius: 999,
+            padding: "5px 10px", background: current ? `${current.color}1E` : COLORS.surface,
+          }}
+        >
+          {current && <ProjectDot color={current.color} />}
+          <span style={{ color: current ? COLORS.text : COLORS.textDim, fontSize: 13, fontWeight: 700 }}>{label}</span>
+          <Icon name="chevronDown" size={13} color={COLORS.textFaint} />
+        </button>
+      }
+    >
+      <div style={{ maxHeight: 260, overflowY: "auto" }}>
+        {allowAll && (
+          <PopoverItem active={value === null} onClick={() => { onChange(null); setOpen(false); }}>
+            Все проекты
+          </PopoverItem>
+        )}
+        {!allowAll && (
+          <PopoverItem active={value === null} onClick={() => { onChange(null); setOpen(false); }}>
+            Без проекта
+          </PopoverItem>
+        )}
+        {projects.map((p) => (
+          <PopoverItem key={p.id} active={value === p.id} onClick={() => { onChange(p.id); setOpen(false); }}>
+            <ProjectDot color={p.color} />
+            <span style={{ fontWeight: 700 }}>{p.code}</span>
+            <span style={{ color: COLORS.textFaint, fontWeight: 500 }}>{p.name}</span>
+          </PopoverItem>
+        ))}
+      </div>
+
+      <div style={{ borderTop: `1px solid ${COLORS.borderSoft}`, marginTop: 4, paddingTop: 4 }}>
+        {!creating ? (
+          <PopoverItem onClick={() => setCreating(true)}>
+            <Icon name="plus" size={15} color={COLORS.accent} /> <span style={{ color: COLORS.accent }}>Новый проект</span>
+          </PopoverItem>
+        ) : (
+          <div style={{ padding: 6 }} onMouseDown={(e) => e.stopPropagation()}>
+            <input
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              placeholder="Код, напр. БАР"
+              maxLength={8}
+              style={{
+                width: "100%", background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+                borderRadius: 8, padding: "6px 8px", color: COLORS.text, fontSize: 13, outline: "none",
+              }}
+              className="mb-1.5"
+            />
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Название проекта"
+              style={{
+                width: "100%", background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+                borderRadius: 8, padding: "6px 8px", color: COLORS.text, fontSize: 13, outline: "none",
+              }}
+              className="mb-1.5"
+            />
+            <div className="flex items-center gap-1.5 flex-wrap mb-2">
+              {PROJECT_PALETTE.map((c) => (
+                <button
+                  key={c}
+                  onClick={() => setColor(c)}
+                  style={{
+                    width: 18, height: 18, borderRadius: "50%", background: c,
+                    border: color === c ? `2px solid ${COLORS.text}` : "2px solid transparent",
+                  }}
+                />
+              ))}
+            </div>
+            <div className="flex gap-1.5">
+              <button
+                onClick={submitCreate}
+                disabled={!code.trim()}
+                style={{
+                  flex: 1, background: code.trim() ? COLORS.accent : COLORS.border,
+                  color: code.trim() ? "#0D1117" : COLORS.textFaint,
+                  borderRadius: 8, padding: "6px 0", fontSize: 12.5, fontWeight: 700,
+                }}
+              >
+                Создать
+              </button>
+              <button onClick={resetForm} style={{ color: COLORS.textFaint, fontSize: 12.5, padding: "6px 10px" }}>
+                Отмена
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </Popover>
+  );
+}
+
+/* ---------------------------------------------------------
+   Модалка создания / редактирования задачи
+--------------------------------------------------------- */
+function TaskModal({ initial, projects, onClose, onSave, onDelete, onCreateProject }) {
+  const isEdit = !!initial;
+  const [title, setTitle] = useState(initial?.title || "");
+  const [desc, setDesc] = useState(initial?.desc || "");
+  const [assignee, setAssignee] = useState(initial?.assignee || null);
+  const [projectId, setProjectId] = useState(initial?.projectId || null);
+  const [dueDate, setDueDate] = useState(initial?.dueDate || "");
+  const [recurring, setRecurring] = useState(!!initial?.recurring);
+  const [freq, setFreq] = useState(initial?.recurring?.freq || "weekly");
+  const [status, setStatus] = useState(initial?.status || "active");
+  const [blocked, setBlocked] = useState(!!initial?.blocked);
+  const [blockedReason, setBlockedReason] = useState(initial?.blocked?.reason || "");
+  const titleRef = useRef(null);
+
+  useEffect(() => {
+    titleRef.current?.focus();
+  }, []);
+
+  function handleSave() {
+    if (!title.trim()) {
+      titleRef.current?.focus();
+      return;
+    }
+    onSave({
+      title: title.trim(),
+      desc: desc.trim(),
+      assignee,
+      projectId,
+      dueDate: dueDate || null,
+      recurring: recurring ? { freq } : null,
+      status,
+      completedAt: status === "done" ? (initial?.completedAt || new Date().toISOString()) : null,
+      blocked: status === "active" && blocked ? { reason: blockedReason.trim(), since: initial?.blocked?.since || new Date().toISOString() } : null,
+    });
+  }
+
+  return (
+    <div
+      onMouseDown={onClose}
+      style={{
+        position: "fixed", inset: 0, background: "rgba(8,10,14,0.6)",
+        display: "flex", alignItems: "flex-end", justifyContent: "center",
+        zIndex: 50, backdropFilter: "blur(2px)",
+      }}
+      className="sm:items-center"
+    >
+      <div
+        onMouseDown={(e) => e.stopPropagation()}
+        style={{
+          background: COLORS.surfaceRaised, border: `1px solid ${COLORS.border}`,
+          width: "100%", maxWidth: 520, maxHeight: "92vh", overflowY: "auto",
+          borderRadius: "16px 16px 0 0",
+        }}
+        className="sm:rounded-2xl p-5"
+      >
+        <div className="flex items-center justify-between mb-4">
+          <h2 style={{ color: COLORS.text, fontSize: 18, fontWeight: 700 }}>
+            {isEdit ? "Изменить задачу" : "Новая задача"}
+          </h2>
+          <button onClick={onClose} style={{ color: COLORS.textFaint }} aria-label="Закрыть">
+            <Icon name="x" size={20} />
+          </button>
+        </div>
+
+        <label style={{ color: COLORS.textDim, fontSize: 13, fontWeight: 600 }} className="block mb-1.5">
+          Что нужно сделать
+        </label>
+        <input
+          ref={titleRef}
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder="Например: собрать отчёт по РК за неделю"
+          style={{
+            width: "100%", background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+            borderRadius: 10, padding: "10px 12px", color: COLORS.text, fontSize: 15, outline: "none",
+          }}
+          className="mb-4"
+        />
+
+        <label style={{ color: COLORS.textDim, fontSize: 13, fontWeight: 600 }} className="block mb-1.5">
+          Комментарий / детали
+        </label>
+        <textarea
+          value={desc}
+          onChange={(e) => setDesc(e.target.value)}
+          rows={3}
+          placeholder="Необязательно — контекст, ссылки, критерии готовности"
+          style={{
+            width: "100%", background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+            borderRadius: 10, padding: "10px 12px", color: COLORS.text, fontSize: 14,
+            outline: "none", resize: "vertical",
+          }}
+          className="mb-4"
+        />
+
+        <div className="flex items-center gap-3 mb-4 flex-wrap">
+          <div>
+            <label style={{ color: COLORS.textDim, fontSize: 13, fontWeight: 600 }} className="block mb-1.5">Проект</label>
+            <ProjectDropdown projects={projects} value={projectId} onChange={setProjectId} onCreate={onCreateProject} />
+          </div>
+          <div>
+            <label style={{ color: COLORS.textDim, fontSize: 13, fontWeight: 600 }} className="block mb-1.5">Срок</label>
+            <input
+              type="date"
+              value={dueDate}
+              onChange={(e) => setDueDate(e.target.value)}
+              style={{
+                background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+                borderRadius: 999, padding: "6px 12px", color: COLORS.text, fontSize: 13,
+                outline: "none", colorScheme: "dark",
+              }}
+            />
+          </div>
+        </div>
+
+        <label style={{ color: COLORS.textDim, fontSize: 13, fontWeight: 600 }} className="block mb-1.5">
+          Ответственный
+        </label>
+        <div className="flex gap-2 mb-4 flex-wrap">
+          <button
+            onClick={() => setAssignee(null)}
+            style={{
+              padding: "6px 12px", borderRadius: 999, fontSize: 13, fontWeight: 600,
+              border: `1px solid ${assignee === null ? COLORS.accent : COLORS.border}`,
+              color: assignee === null ? COLORS.accent : COLORS.textDim,
+              background: assignee === null ? COLORS.accentSoft : "transparent",
+            }}
+          >
+            Не назначено
+          </button>
+          {PEOPLE_LIST.map((k) => (
+            <button
+              key={k}
+              onClick={() => setAssignee(k)}
+              style={{
+                display: "flex", alignItems: "center", gap: 6, padding: "6px 12px 6px 6px",
+                borderRadius: 999, fontSize: 13, fontWeight: 600,
+                border: `1px solid ${assignee === k ? PEOPLE[k].color : COLORS.border}`,
+                color: assignee === k ? COLORS.text : COLORS.textDim,
+                background: assignee === k ? `${PEOPLE[k].color}22` : "transparent",
+              }}
+            >
+              <Avatar personKey={k} size={18} />
+              {PEOPLE[k].name}
+            </button>
+          ))}
+        </div>
+
+        <label style={{ color: COLORS.textDim, fontSize: 13, fontWeight: 600 }} className="block mb-1.5">
+          Статус
+        </label>
+        <div className="flex gap-2 mb-4 flex-wrap">
+          {Object.entries(STATUS).map(([k, v]) => (
+            <button
+              key={k}
+              onClick={() => setStatus(k)}
+              style={{
+                padding: "6px 12px", borderRadius: 999, fontSize: 13, fontWeight: 700,
+                border: `1px solid ${status === k ? v.color : COLORS.border}`,
+                color: status === k ? v.color : COLORS.textDim,
+                background: status === k ? `${v.color}20` : "transparent",
+              }}
+            >
+              {v.label}
+            </button>
+          ))}
+        </div>
+
+        {status === "active" && (
+          <div
+            style={{ border: `1px solid ${blocked ? COLORS.blocked : COLORS.border}`, borderRadius: 12, padding: 12 }}
+            className="mb-4"
+          >
+            <label className="flex items-center justify-between cursor-pointer">
+              <span style={{ display: "flex", alignItems: "center", gap: 8, color: COLORS.text, fontSize: 14, fontWeight: 600 }}>
+                <Icon name="flag" size={16} color={blocked ? COLORS.blocked : COLORS.textDim} />
+                Не хватает чего-то для решения
+              </span>
+              <input
+                type="checkbox"
+                checked={blocked}
+                onChange={(e) => setBlocked(e.target.checked)}
+                style={{ width: 18, height: 18, accentColor: COLORS.blocked }}
+              />
+            </label>
+            {blocked && (
+              <input
+                value={blockedReason}
+                onChange={(e) => setBlockedReason(e.target.value)}
+                placeholder="Чего именно не хватает: данных, ответа, доступа…"
+                style={{
+                  width: "100%", background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+                  borderRadius: 8, padding: "8px 10px", color: COLORS.text, fontSize: 13.5,
+                  outline: "none", marginTop: 10,
+                }}
+              />
+            )}
+          </div>
+        )}
+
+        <div
+          style={{ border: `1px solid ${COLORS.border}`, borderRadius: 12, padding: 12 }}
+          className="mb-2"
+        >
+          <label className="flex items-center justify-between cursor-pointer">
+            <span style={{ display: "flex", alignItems: "center", gap: 8, color: COLORS.text, fontSize: 14, fontWeight: 600 }}>
+              <Icon name="repeat" size={16} color={COLORS.textDim} />
+              Регулярная задача
+            </span>
+            <input
+              type="checkbox"
+              checked={recurring}
+              onChange={(e) => setRecurring(e.target.checked)}
+              style={{ width: 18, height: 18, accentColor: COLORS.accent }}
+            />
+          </label>
+          {recurring && (
+            <div className="flex gap-2 mt-3 flex-wrap">
+              {Object.entries(FREQ).map(([k, v]) => (
+                <button
+                  key={k}
+                  onClick={() => setFreq(k)}
+                  style={{
+                    padding: "6px 12px", borderRadius: 999, fontSize: 13, fontWeight: 600,
+                    border: `1px solid ${freq === k ? COLORS.accent : COLORS.border}`,
+                    color: freq === k ? COLORS.accent : COLORS.textDim,
+                    background: freq === k ? COLORS.accentSoft : "transparent",
+                  }}
+                >
+                  {v.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between mt-5 gap-2">
+          <div>
+            {isEdit && (
+              <button
+                onClick={() => onDelete(initial.id)}
+                style={{ color: COLORS.danger, fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}
+              >
+                <Icon name="trash" size={15} /> Удалить
+              </button>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={onClose}
+              style={{
+                padding: "9px 16px", borderRadius: 10, fontSize: 14, fontWeight: 600,
+                color: COLORS.textDim, border: `1px solid ${COLORS.border}`,
+              }}
+            >
+              Отмена
+            </button>
+            <button
+              onClick={handleSave}
+              style={{
+                padding: "9px 18px", borderRadius: 10, fontSize: 14, fontWeight: 700,
+                color: "#0D1117", background: COLORS.accent,
+              }}
+            >
+              {isEdit ? "Сохранить" : "Добавить"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
+   Блок комментариев (двойное сворачивание)
+--------------------------------------------------------- */
+function Comments({ task, expanded, onToggle, currentUser, onAdd }) {
+  const [text, setText] = useState("");
+  const count = task.comments.length;
+
+  function submit() {
+    if (!text.trim()) return;
+    onAdd(task.id, text.trim());
+    setText("");
+  }
+
+  return (
+    <div style={{ borderTop: `1px solid ${COLORS.borderSoft}`, marginTop: 10, paddingTop: 8 }}>
+      <button
+        onClick={onToggle}
+        className="flex items-center gap-1.5"
+        style={{ color: COLORS.textDim, fontSize: 13, fontWeight: 600 }}
+      >
+        {expanded ? <Icon name="chevronDown" size={15} /> : <Icon name="chevronRight" size={15} />}
+        <Icon name="message" size={14} />
+        Комментарии {count > 0 && `(${count})`}
+      </button>
+
+      {expanded && (
+        <div className="mt-2.5 flex flex-col gap-2">
+          {task.comments.length === 0 && (
+            <p style={{ color: COLORS.textFaint, fontSize: 13 }}>Пока пусто — оставьте первый комментарий.</p>
+          )}
+          {task.comments.map((c) => (
+            <div key={c.id} style={{ background: COLORS.surface, borderRadius: 10, padding: "8px 10px" }}>
+              <div className="flex items-center gap-1.5 mb-1">
+                <Avatar personKey={c.author} size={16} />
+                <span style={{ color: COLORS.text, fontSize: 12.5, fontWeight: 700 }}>
+                  {PEOPLE[c.author]?.name || "Гость"}
+                </span>
+                <span style={{ color: COLORS.textFaint, fontSize: 11.5 }}>{humanDateTime(c.createdAt)}</span>
+              </div>
+              <p style={{ color: COLORS.textDim, fontSize: 13.5, whiteSpace: "pre-wrap", lineHeight: 1.4 }}>
+                {c.text}
+              </p>
+            </div>
+          ))}
+          <div className="flex items-end gap-2 mt-1">
+            <textarea
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  submit();
+                }
+              }}
+              placeholder={currentUser ? `Написать как ${PEOPLE[currentUser].name}…` : "Выберите себя вверху страницы…"}
+              rows={1}
+              style={{
+                flex: 1, background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+                borderRadius: 9, padding: "8px 10px", color: COLORS.text, fontSize: 13.5,
+                outline: "none", resize: "none",
+              }}
+            />
+            <button
+              onClick={submit}
+              disabled={!text.trim()}
+              style={{
+                background: text.trim() ? COLORS.accent : COLORS.border,
+                color: text.trim() ? "#0D1117" : COLORS.textFaint,
+                borderRadius: 9, padding: "8px 12px", fontSize: 13, fontWeight: 700,
+                flexShrink: 0,
+              }}
+            >
+              Отправить
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
+   Инлайн-редактор причины блокировки (внутри развёрнутой задачи)
+--------------------------------------------------------- */
+function BlockedEditor({ task, onSave, onCancel }) {
+  const [reason, setReason] = useState(task.blocked?.reason || "");
+  return (
+    <div style={{ background: COLORS.blockedSoft, border: `1px solid ${COLORS.blocked}`, borderRadius: 10, padding: 10 }} className="mb-2.5">
+      <input
+        autoFocus
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+        placeholder="Чего не хватает: данных, ответа, доступа…"
+        style={{
+          width: "100%", background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+          borderRadius: 8, padding: "7px 9px", color: COLORS.text, fontSize: 13, outline: "none",
+        }}
+        className="mb-2"
+      />
+      <div className="flex gap-2">
+        <button
+          onClick={() => onSave(reason.trim())}
+          style={{ background: COLORS.blocked, color: "#1A1300", borderRadius: 8, padding: "5px 12px", fontSize: 12.5, fontWeight: 700 }}
+        >
+          Сохранить
+        </button>
+        <button onClick={onCancel} style={{ color: COLORS.textFaint, fontSize: 12.5, padding: "5px 10px" }}>
+          Отмена
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
+   Строка задачи
+--------------------------------------------------------- */
+function TaskRow({
+  task, project, expanded, onToggleExpand, commentsExpanded, onToggleComments,
+  onToggleDone, onSetProgress, onEdit, onAddComment, currentUser, todayDone,
+  onSetBlocked,
+}) {
+  const [editingBlocked, setEditingBlocked] = useState(false);
+  const isActive = task.status === "active";
+  const isOverdue = isActive && task.dueDate && task.dueDate < todayStr() && !task.blocked;
+  const isDone = task.status === "done";
+  const isCancelled = task.status === "cancelled";
+  const isDeferred = task.status === "deferred";
+  const person = task.assignee ? PEOPLE[task.assignee] : null;
+
+  let leftBorder = person?.color || COLORS.border;
+  if (isCancelled) leftBorder = COLORS.cancelled;
+  else if (isDone) leftBorder = COLORS.success;
+  else if (isDeferred) leftBorder = COLORS.deferred;
+  else if (task.blocked) leftBorder = COLORS.blocked;
+  else if (isOverdue) leftBorder = COLORS.danger;
+
+  return (
+    <div
+      style={{
+        background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+        borderLeft: `3px solid ${leftBorder}`, borderRadius: 12,
+        padding: "10px 12px", marginBottom: 8, opacity: isCancelled ? 0.65 : 1,
+      }}
+    >
+      <div className="flex items-start gap-2.5">
+        <button
+          onClick={() => onToggleDone(task)}
+          title={task.recurring ? (todayDone ? "Снять отметку за сегодня" : "Отметить выполненным сегодня") : (isDone ? "Вернуть в работу" : "Отметить выполненным")}
+          style={{ marginTop: 1, flexShrink: 0, color: (isDone || todayDone) ? COLORS.success : COLORS.textFaint }}
+        >
+          {(isDone || todayDone) ? <Icon name="checkCircle" size={20} /> : <Icon name="circle" size={20} />}
+        </button>
+
+        <div className="flex-1 min-w-0" onClick={onToggleExpand} style={{ cursor: "pointer" }}>
+          <div className="flex items-center flex-wrap gap-x-2 gap-y-1">
+            {project && (
+              <Pill color={project.color} bg={`${project.color}20`} style={{ fontWeight: 800 }}>
+                {project.code}
+              </Pill>
+            )}
+            <span
+              style={{
+                color: (isDone || isCancelled) ? COLORS.textFaint : COLORS.text,
+                textDecoration: (isDone || isCancelled) ? "line-through" : "none",
+                fontSize: 14.5, fontWeight: 600, lineHeight: 1.3,
+              }}
+            >
+              {task.title}
+            </span>
+            {isDeferred && <Pill color={COLORS.deferred} bg={COLORS.deferredSoft}><Icon name="archive" size={11} /> отложена</Pill>}
+            {isCancelled && <Pill color={COLORS.cancelled} bg={COLORS.cancelledSoft}><Icon name="ban" size={11} /> отменена</Pill>}
+            {task.blocked && (
+              <Pill color={COLORS.blocked} bg={COLORS.blockedSoft} title={task.blocked.reason}>
+                <Icon name="flag" size={11} /> {task.blocked.reason ? task.blocked.reason : "не хватает данных"}
+              </Pill>
+            )}
+            {task.recurring && (
+              <Pill color={COLORS.accent} bg={COLORS.accentSoft} title={FREQ[task.recurring.freq].label}>
+                <Icon name="repeat" size={11} /> {FREQ[task.recurring.freq].short}
+              </Pill>
+            )}
+            {task.comments.length > 0 && (
+              <Pill>
+                <Icon name="message" size={11} /> {task.comments.length}
+              </Pill>
+            )}
+          </div>
+
+          <div className="flex items-center flex-wrap gap-x-3 gap-y-1 mt-1">
+            {person && (
+              <span className="flex items-center gap-1.5" style={{ fontSize: 12.5, color: COLORS.textDim }}>
+                <Avatar personKey={task.assignee} size={16} /> {person.name}
+              </span>
+            )}
+            {task.dueDate && (
+              <span
+                className="flex items-center gap-1"
+                style={{ fontSize: 12.5, color: isOverdue ? COLORS.danger : COLORS.textDim, fontWeight: isOverdue ? 700 : 400 }}
+              >
+                {isOverdue ? <Icon name="alertTriangle" size={12.5} /> : <Icon name="calendar" size={12.5} />}
+                {isOverdue ? `просрочено · ${humanDate(task.dueDate)}` : humanDate(task.dueDate)}
+              </span>
+            )}
+            {task.recurring && task.history?.length > 0 && (
+              <span style={{ fontSize: 12.5, color: COLORS.textFaint }}>
+                выполнялась {task.history.length} раз
+              </span>
+            )}
+            {isActive && !task.blocked && task.progress > 0 && (
+              <span style={{ fontSize: 12.5, color: COLORS.textFaint, fontVariantNumeric: "tabular-nums" }}>
+                {task.progress}%
+              </span>
+            )}
+          </div>
+
+          {isActive && !task.blocked && task.progress > 0 && (
+            <div style={{ height: 4, background: COLORS.border, borderRadius: 999, marginTop: 7, overflow: "hidden" }}>
+              <div style={{ height: "100%", width: `${task.progress}%`, background: COLORS.accent, borderRadius: 999 }} />
+            </div>
+          )}
+        </div>
+
+        <button onClick={onToggleExpand} style={{ color: COLORS.textFaint, marginTop: 2, flexShrink: 0 }}>
+          {expanded ? <Icon name="chevronDown" size={18} /> : <Icon name="chevronRight" size={18} />}
+        </button>
+      </div>
+
+      {expanded && (
+        <div style={{ marginTop: 10, paddingLeft: 30 }}>
+          {task.desc && (
+            <p style={{ color: COLORS.textDim, fontSize: 13.5, lineHeight: 1.5, whiteSpace: "pre-wrap" }} className="mb-2.5">
+              {task.desc}
+            </p>
+          )}
+
+          {isActive && !task.recurring && !task.blocked && (
+            <div className="flex items-center gap-2 mb-2.5 flex-wrap">
+              <span style={{ color: COLORS.textFaint, fontSize: 12, fontWeight: 600 }}>Прогресс:</span>
+              {[0, 25, 50, 75, 100].map((v) => (
+                <button
+                  key={v}
+                  onClick={() => onSetProgress(task, v)}
+                  style={{
+                    padding: "3px 9px", borderRadius: 999, fontSize: 12, fontWeight: 600,
+                    border: `1px solid ${task.progress === v ? COLORS.accent : COLORS.border}`,
+                    color: task.progress === v ? COLORS.accent : COLORS.textFaint,
+                    background: task.progress === v ? COLORS.accentSoft : "transparent",
+                  }}
+                >
+                  {v}%
+                </button>
+              ))}
+            </div>
+          )}
+
+          {isActive && editingBlocked && (
+            <BlockedEditor
+              task={task}
+              onSave={(reason) => { onSetBlocked(task, { reason, since: task.blocked?.since || new Date().toISOString() }); setEditingBlocked(false); }}
+              onCancel={() => setEditingBlocked(false)}
+            />
+          )}
+
+          <div className="flex items-center gap-3 mb-1 flex-wrap">
+            <button onClick={() => onEdit(task)} className="flex items-center gap-1" style={{ color: COLORS.textDim, fontSize: 12.5, fontWeight: 600 }}>
+              <Icon name="pencil" size={13} /> Изменить
+            </button>
+            {isActive && !editingBlocked && (
+              task.blocked ? (
+                <button onClick={() => onSetBlocked(task, null)} className="flex items-center gap-1" style={{ color: COLORS.blocked, fontSize: 12.5, fontWeight: 600 }}>
+                  <Icon name="check" size={13} /> Снять блокировку
+                </button>
+              ) : (
+                <button onClick={() => setEditingBlocked(true)} className="flex items-center gap-1" style={{ color: COLORS.textDim, fontSize: 12.5, fontWeight: 600 }}>
+                  <Icon name="flag" size={13} /> Не хватает данных
+                </button>
+              )
+            )}
+          </div>
+
+          <Comments
+            task={task}
+            expanded={commentsExpanded}
+            onToggle={onToggleComments}
+            currentUser={currentUser}
+            onAdd={onAddComment}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
+   Основное приложение
+--------------------------------------------------------- */
+function App() {
+  const [tasks, setTasks] = useState([]);
+  const [projects, setProjects] = useState(DEFAULT_PROJECTS);
+  const [loading, setLoading] = useState(true);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [filterAssignee, setFilterAssignee] = useState([]);
+  const [filterProject, setFilterProject] = useState(null);
+  const [filterStatus, setFilterStatus] = useState("active");
+  const [expandedIds, setExpandedIds] = useState(() => new Set());
+  const [commentIds, setCommentIds] = useState(() => new Set());
+  const [modal, setModal] = useState({ open: false, task: null });
+  const [userPopoverOpen, setUserPopoverOpen] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchAll() {
+      const [{ data: tRows, error: tErr }, { data: pRows, error: pErr }] = await Promise.all([
+        sb.from("tasks").select("*").order("created_at", { ascending: false }),
+        sb.from("projects").select("*").order("code"),
+      ]);
+      if (tErr) console.error("Не удалось загрузить задачи", tErr);
+      if (pErr) console.error("Не удалось загрузить проекты", pErr);
+      if (cancelled) return;
+      setTasks((tRows || []).map(rowToTask));
+      if (pRows && pRows.length > 0) {
+        setProjects(pRows.map(rowToProject));
+      } else {
+        setProjects(DEFAULT_PROJECTS);
+        await sb.from("projects").upsert(DEFAULT_PROJECTS.map(projectToRow));
+      }
+      setCurrentUser(loadCurrentUser());
+      setLoading(false);
+    }
+    fetchAll();
+
+    function handleTaskChange(payload) {
+      if (payload.eventType === "DELETE") {
+        setTasks((prev) => prev.filter((t) => t.id !== payload.old.id));
+        return;
+      }
+      const task = rowToTask(payload.new);
+      setTasks((prev) => {
+        const exists = prev.some((t) => t.id === task.id);
+        return exists ? prev.map((t) => (t.id === task.id ? task : t)) : [task, ...prev];
+      });
+    }
+    function handleProjectChange(payload) {
+      if (payload.eventType === "DELETE") {
+        setProjects((prev) => prev.filter((p) => p.id !== payload.old.id));
+        return;
+      }
+      const project = rowToProject(payload.new);
+      setProjects((prev) => {
+        const exists = prev.some((p) => p.id === project.id);
+        return exists ? prev.map((p) => (p.id === project.id ? project : p)) : [...prev, project];
+      });
+    }
+
+    const channel = sb
+      .channel("zadachnik-changes")
+      .on("postgres_changes", { event: "*", schema: "public", table: "tasks" }, handleTaskChange)
+      .on("postgres_changes", { event: "*", schema: "public", table: "projects" }, handleProjectChange)
+      .subscribe();
+
+    return () => {
+      cancelled = true;
+      sb.removeChannel(channel);
+    };
+  }, []);
+
+  function commitTask(updatedTask) {
+    setTasks((prev) => prev.map((t) => (t.id === updatedTask.id ? updatedTask : t)));
+    persistTask(updatedTask);
+  }
+
+  function addProject(project) {
+    setProjects((prev) => [...prev, project]);
+    persistProjectRow(project);
+  }
+
+  function toggleExpand(id) {
+    setExpandedIds((prev) => {
+      const n = new Set(prev);
+      n.has(id) ? n.delete(id) : n.add(id);
+      return n;
+    });
+  }
+  function toggleComments(id) {
+    setCommentIds((prev) => {
+      const n = new Set(prev);
+      n.has(id) ? n.delete(id) : n.add(id);
+      return n;
+    });
+  }
+
+  function openNewTask() {
+    setModal({ open: true, task: null });
+  }
+  function openEditTask(task) {
+    setModal({ open: true, task });
+  }
+
+  function saveTask(data) {
+    if (modal.task) {
+      commitTask({ ...modal.task, ...data });
+    } else {
+      const newTask = {
+        id: uid("t"),
+        ...data,
+        progress: 0,
+        createdAt: new Date().toISOString(),
+        history: [],
+        comments: [],
+      };
+      setTasks((prev) => [newTask, ...prev]);
+      persistTask(newTask);
+    }
+    setModal({ open: false, task: null });
+  }
+  function deleteTask(id) {
+    setTasks((prev) => prev.filter((t) => t.id !== id));
+    removeTaskRow(id);
+    setModal({ open: false, task: null });
+  }
+
+  function toggleDone(task) {
+    const today = todayStr();
+    if (task.recurring) {
+      const didToday = task.history?.some((h) => h.date === today);
+      const updated = didToday
+        ? { ...task, history: task.history.filter((h) => h.date !== today) }
+        : {
+            ...task,
+            history: [...task.history, { date: today }],
+            dueDate: addToDate(task.dueDate && task.dueDate >= today ? task.dueDate : today, task.recurring.freq),
+            progress: 0,
+          };
+      commitTask(updated);
+    } else {
+      const willBeDone = task.status !== "done";
+      commitTask({
+        ...task,
+        status: willBeDone ? "done" : "active",
+        progress: willBeDone ? 100 : task.progress,
+        completedAt: willBeDone ? new Date().toISOString() : null,
+        blocked: willBeDone ? null : task.blocked,
+      });
+    }
+  }
+
+  function setProgress(task, value) {
+    commitTask({ ...task, progress: value });
+  }
+
+  function setBlocked(task, blocked) {
+    commitTask({ ...task, blocked });
+  }
+
+  function addComment(taskId, text) {
+    const task = tasks.find((t) => t.id === taskId);
+    if (!task) return;
+    const comment = {
+      id: uid("c"),
+      author: currentUser,
+      text,
+      createdAt: new Date().toISOString(),
+    };
+    commitTask({ ...task, comments: [...task.comments, comment] });
+    setCommentIds((prev) => new Set(prev).add(taskId));
+  }
+
+  function pickUser(key) {
+    setCurrentUser(key);
+    persistCurrentUser(key);
+    setUserPopoverOpen(false);
+  }
+
+  const projectById = useMemo(() => Object.fromEntries(projects.map((p) => [p.id, p])), [projects]);
+
+  /* --------- фильтрация и группировка --------- */
+  const filtered = useMemo(() => {
+    return tasks.filter((t) => {
+      if (filterAssignee.length > 0 && !filterAssignee.includes(t.assignee)) return false;
+      if (filterProject && t.projectId !== filterProject) return false;
+      if (filterStatus === "active" && t.status !== "active") return false;
+      if (filterStatus === "deferred" && t.status !== "deferred") return false;
+      if (filterStatus === "done" && t.status !== "done") return false;
+      return true;
+    });
+  }, [tasks, filterAssignee, filterProject, filterStatus]);
+
+  const groups = useMemo(() => {
+    const today = todayStr();
+    const active = filtered.filter((t) => t.status === "active");
+    const blocked = active.filter((t) => t.blocked);
+    const free = active.filter((t) => !t.blocked);
+
+    const overdue = free.filter((t) => t.dueDate && t.dueDate < today);
+    const dueToday = free.filter((t) => t.dueDate === today);
+    const upcoming = free.filter((t) => t.dueDate && t.dueDate > today);
+    const noDate = free.filter((t) => !t.dueDate);
+
+    const byDate = (a, b) => (a.dueDate || "9999").localeCompare(b.dueDate || "9999");
+    const byCreated = (a, b) => (b.createdAt || "").localeCompare(a.createdAt || "");
+
+    return {
+      blocked: blocked.sort(byCreated),
+      overdue: overdue.sort(byDate),
+      dueToday: dueToday.sort(byCreated),
+      upcoming: upcoming.sort(byDate),
+      noDate: noDate.sort(byCreated),
+      deferred: filtered.filter((t) => t.status === "deferred").sort(byCreated),
+      done: filtered.filter((t) => t.status === "done").sort((a, b) => (b.completedAt || "").localeCompare(a.completedAt || "")),
+      cancelled: filtered.filter((t) => t.status === "cancelled").sort(byCreated),
+    };
+  }, [filtered]);
+
+  const stats = useMemo(() => {
+    const today = todayStr();
+    const active = tasks.filter((t) => t.status === "active");
+    return {
+      active: active.length,
+      overdue: active.filter((t) => !t.blocked && t.dueDate && t.dueDate < today).length,
+      today: active.filter((t) => !t.blocked && t.dueDate === today).length,
+      blocked: active.filter((t) => t.blocked).length,
+    };
+  }, [tasks]);
+
+  const rowProps = {
+    currentUser,
+    onToggleDone: toggleDone,
+    onSetProgress: setProgress,
+    onSetBlocked: setBlocked,
+    onEdit: openEditTask,
+    onAddComment: addComment,
+  };
+
+  function renderSection(title, list, tone, icon, key, defaultOpen = true) {
+    if (list.length === 0) return null;
+    return (
+      <SectionBlock title={title} tone={tone} icon={icon} count={list.length} defaultOpen={defaultOpen} key={key}>
+        {list.map((t) => {
+          const today = todayStr();
+          const todayDone = t.recurring ? t.history?.some((h) => h.date === today) : false;
+          return (
+            <TaskRow
+              key={t.id}
+              task={t}
+              project={t.projectId ? projectById[t.projectId] : null}
+              {...rowProps}
+              expanded={expandedIds.has(t.id)}
+              onToggleExpand={() => toggleExpand(t.id)}
+              commentsExpanded={commentIds.has(t.id)}
+              onToggleComments={() => toggleComments(t.id)}
+              todayDone={todayDone}
+            />
+          );
+        })}
+      </SectionBlock>
+    );
+  }
+
+  const showActiveGroups = filterStatus === "active" || filterStatus === "all";
+  const showDeferred = filterStatus === "deferred" || filterStatus === "all";
+  const showDone = filterStatus === "done" || filterStatus === "all";
+  const showCancelled = filterStatus === "all";
+
+  const totalShown =
+    groups.blocked.length + groups.overdue.length + groups.dueToday.length + groups.upcoming.length + groups.noDate.length +
+    (showDeferred ? groups.deferred.length : 0) + (showDone ? groups.done.length : 0) + (showCancelled ? groups.cancelled.length : 0);
+
+  return (
+    <div style={{ background: COLORS.bg, minHeight: "100%", fontFamily: "'Manrope', ui-sans-serif, system-ui, -apple-system, sans-serif" }}>
+      
+      {/* Шапка */}
+      <header style={{ background: COLORS.bgHeader, borderBottom: `1px solid ${COLORS.border}`, position: "sticky", top: 0, zIndex: 20 }}>
+        <div className="max-w-3xl mx-auto px-4 py-3.5 flex items-center justify-between gap-3">
+          <div>
+            <h1 style={{ color: COLORS.text, fontSize: 19, fontWeight: 800, letterSpacing: -0.2 }}>Задачник</h1>
+            <p style={{ color: COLORS.textFaint, fontSize: 12, marginTop: 1 }}>
+              {stats.active} активных
+              {stats.overdue > 0 && <span style={{ color: COLORS.danger }}> · {stats.overdue} просрочено</span>}
+              {stats.blocked > 0 && <span style={{ color: COLORS.blocked }}> · {stats.blocked} без ресурса</span>}
+              {stats.today > 0 && <span> · {stats.today} сегодня</span>}
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Popover
+              open={userPopoverOpen}
+              onOpenChange={setUserPopoverOpen}
+              align="right"
+              trigger={
+                <button
+                  onClick={() => setUserPopoverOpen((s) => !s)}
+                  className="flex items-center gap-1.5"
+                  style={{
+                    border: `1px solid ${COLORS.border}`, borderRadius: 999,
+                    padding: currentUser ? "3px 10px 3px 3px" : "6px 10px",
+                    background: COLORS.surface,
+                  }}
+                >
+                  {currentUser ? (
+                    <>
+                      <Avatar personKey={currentUser} size={22} />
+                      <span style={{ color: COLORS.text, fontSize: 13, fontWeight: 600 }}>{PEOPLE[currentUser].name}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Icon name="user" size={15} color={COLORS.textDim} />
+                      <span style={{ color: COLORS.textDim, fontSize: 13, fontWeight: 600 }}>Я — это…</span>
+                    </>
+                  )}
+                </button>
+              }
+            >
+              {PEOPLE_LIST.map((k) => (
+                <PopoverItem key={k} active={currentUser === k} onClick={() => pickUser(k)}>
+                  <Avatar personKey={k} size={20} /> {PEOPLE[k].name}
+                </PopoverItem>
+              ))}
+            </Popover>
+
+            <button
+              onClick={openNewTask}
+              className="flex items-center gap-1.5"
+              style={{
+                background: COLORS.accent, color: "#0D1117", borderRadius: 10,
+                padding: "8px 12px", fontSize: 13.5, fontWeight: 700,
+              }}
+            >
+              <Icon name="plus" size={16} /> <span className="hidden sm:inline">Задача</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Фильтры */}
+        <div className="max-w-3xl mx-auto px-4 pb-3 flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-1.5">
+            {["active", "deferred", "done", "all"].map((s) => (
+              <button
+                key={s}
+                onClick={() => setFilterStatus(s)}
+                style={{
+                  padding: "5px 11px", borderRadius: 999, fontSize: 12.5, fontWeight: 700,
+                  color: filterStatus === s ? COLORS.text : COLORS.textFaint,
+                  background: filterStatus === s ? COLORS.surfaceRaised : "transparent",
+                  border: `1px solid ${filterStatus === s ? COLORS.border : "transparent"}`,
+                }}
+              >
+                {s === "active" ? "Активные" : s === "deferred" ? "Отложенные" : s === "done" ? "Выполненные" : "Все"}
+              </button>
+            ))}
+          </div>
+          <div style={{ width: 1, height: 16, background: COLORS.border }} />
+          <AssigneeFilterDropdown value={filterAssignee} onChange={setFilterAssignee} />
+          <ProjectDropdown projects={projects} value={filterProject} onChange={setFilterProject} onCreate={addProject} allowAll />
+        </div>
+      </header>
+
+      {/* Контент */}
+      <main className="max-w-3xl mx-auto px-4 py-5" style={{ paddingBottom: 90 }}>
+        {loading ? (
+          <div className="flex items-center justify-center" style={{ padding: "60px 0", color: COLORS.textFaint }}>
+            <Icon name="loader" size={20} className="animate-spin" />
+            <span className="ml-2" style={{ fontSize: 14 }}>Загружаем задачи…</span>
+          </div>
+        ) : totalShown === 0 ? (
+          <div className="flex flex-col items-center text-center" style={{ padding: "70px 20px", color: COLORS.textFaint }}>
+            <Icon name="inbox" size={30} style={{ marginBottom: 10, opacity: 0.6 }} />
+            <p style={{ fontSize: 14.5, color: COLORS.textDim, fontWeight: 600 }}>
+              {filterStatus === "done" ? "Выполненных задач пока нет" : filterStatus === "deferred" ? "Отложенных задач нет" : "Задач по этим фильтрам нет"}
+            </p>
+            <p style={{ fontSize: 13, marginTop: 4 }}>Добавьте задачу кнопкой выше — или смените фильтры.</p>
+          </div>
+        ) : (
+          <>
+            {showActiveGroups && renderSection("Не хватает ресурса", groups.blocked, COLORS.blocked, <Icon name="flag" size={13} color={COLORS.blocked} />, "blocked")}
+            {showActiveGroups && renderSection("Просрочено", groups.overdue, COLORS.danger, <Icon name="alertTriangle" size={13} color={COLORS.danger} />, "overdue")}
+            {showActiveGroups && renderSection("Сегодня", groups.dueToday, COLORS.text, <Icon name="calendar" size={13} color={COLORS.textDim} />, "today")}
+            {showActiveGroups && renderSection("Предстоящие", groups.upcoming, COLORS.textDim, <Icon name="calendar" size={13} color={COLORS.textFaint} />, "upcoming")}
+            {showActiveGroups && renderSection("Без срока", groups.noDate, COLORS.textDim, <Icon name="circle" size={13} color={COLORS.textFaint} />, "nodate")}
+            {showDeferred && renderSection("Отложено", groups.deferred, COLORS.deferred, <Icon name="archive" size={13} color={COLORS.deferred} />, "deferred", filterStatus === "deferred")}
+            {showDone && renderSection("Выполнено", groups.done, COLORS.success, <Icon name="checkCircle" size={13} color={COLORS.success} />, "done", filterStatus === "done")}
+            {showCancelled && renderSection("Отменено", groups.cancelled, COLORS.cancelled, <Icon name="ban" size={13} color={COLORS.cancelled} />, "cancelled", false)}
+          </>
+        )}
+      </main>
+
+      {/* Плавающая кнопка на мобильных */}
+      <button
+        onClick={openNewTask}
+        className="sm:hidden"
+        style={{
+          position: "fixed", right: 18, bottom: 18, width: 52, height: 52, borderRadius: "50%",
+          background: COLORS.accent, color: "#0D1117", display: "flex", alignItems: "center",
+          justifyContent: "center", boxShadow: "0 6px 18px rgba(91,141,239,0.4)", zIndex: 25,
+        }}
+        aria-label="Новая задача"
+      >
+        <Icon name="plus" size={24} />
+      </button>
+
+      {modal.open && (
+        <TaskModal
+          initial={modal.task}
+          projects={projects}
+          onClose={() => setModal({ open: false, task: null })}
+          onSave={saveTask}
+          onDelete={deleteTask}
+          onCreateProject={addProject}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
+   Свёрнутая/развёрнутая секция списка
+--------------------------------------------------------- */
+function SectionBlock({ title, tone, icon, count, defaultOpen, children }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="mb-5">
+      <button onClick={() => setOpen((o) => !o)} className="flex items-center gap-2 mb-2">
+        {open ? <Icon name="chevronDown" size={14} color={COLORS.textFaint} /> : <Icon name="chevronRight" size={14} color={COLORS.textFaint} />}
+        {icon}
+        <span style={{ color: tone, fontSize: 13, fontWeight: 700, letterSpacing: 0.2 }}>{title}</span>
+        <span style={{ color: COLORS.textFaint, fontSize: 12.5 }}>{count}</span>
+      </button>
+      {open && children}
+    </div>
+  );
+}
+
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+
+</script>
+</body>
+</html>
