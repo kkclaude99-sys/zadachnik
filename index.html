@@ -1150,8 +1150,8 @@ function TaskRow({
 --------------------------------------------------------- */
 function CalendarDayGroup({ dateStr, list, projectById, rowProps, expandedIds, toggleExpand, commentIds, toggleComments, isToday, title }) {
   return (
-    <div className="mb-5">
-      <div className="flex items-center gap-2 mb-2">
+    <div style={{ marginBottom: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
         <span style={{ color: isToday ? COLORS.accent : COLORS.text, fontSize: 13.5, fontWeight: 800 }}>{title}</span>
         <span style={{ color: COLORS.textFaint, fontSize: 12.5 }}>{list.length}</span>
       </div>
@@ -1181,7 +1181,7 @@ function CalendarDayGroup({ dateStr, list, projectById, rowProps, expandedIds, t
 
 function CalendarView({
   tasks, projectById, currentUser, filterAssignee, filterProject, onSetFilterAssignee,
-  expandedIds, toggleExpand, commentIds, toggleComments, rowProps,
+  expandedIds, toggleExpand, commentIds, toggleComments, rowProps, isMobile,
 }) {
   const [mode, setMode] = useState("week");
   const [anchor, setAnchor] = useState(todayStr());
@@ -1222,11 +1222,11 @@ function CalendarView({
   }
 
   return (
-    <div className="flex flex-col md:flex-row gap-6">
-      <div className="flex-1 min-w-0">
+    <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", gap: 24 }}>
+      <div style={{ flex: "1 1 0%", minWidth: 0 }}>
         {/* Тулбар календаря */}
-        <div className="flex items-center justify-between gap-2 mb-4 flex-wrap">
-          <div className="flex items-center gap-1.5">
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             {["month", "week", "day"].map((m) => (
               <button
                 key={m}
@@ -1242,12 +1242,12 @@ function CalendarView({
               </button>
             ))}
           </div>
-          <div className="flex items-center gap-2">
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             {currentUser && (
               <button
                 onClick={() => onSetFilterAssignee(filterAssignee.length === 1 && filterAssignee[0] === currentUser ? [] : [currentUser])}
-                className="flex items-center gap-1.5"
                 style={{
+                  display: "flex", alignItems: "center", gap: 6,
                   padding: "5px 10px", borderRadius: 999, fontSize: 12.5, fontWeight: 700,
                   border: `1px solid ${filterAssignee[0] === currentUser ? COLORS.accent : COLORS.border}`,
                   color: filterAssignee[0] === currentUser ? COLORS.accent : COLORS.textDim,
@@ -1257,14 +1257,16 @@ function CalendarView({
                 <Avatar personKey={currentUser} size={16} /> Только мои
               </button>
             )}
-            <button onClick={() => shift(-1)} style={{ color: COLORS.textDim, padding: 4 }}><Icon name="chevronRight" size={16} style={{ transform: "rotate(180deg)" }} /></button>
-            <button
-              onClick={goToday}
-              style={{ padding: "5px 11px", borderRadius: 999, fontSize: 12.5, fontWeight: 700, color: COLORS.textDim, border: `1px solid ${COLORS.border}` }}
-            >
-              Сегодня
-            </button>
-            <button onClick={() => shift(1)} style={{ color: COLORS.textDim, padding: 4 }}><Icon name="chevronRight" size={16} /></button>
+            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <button onClick={() => shift(-1)} style={{ color: COLORS.textDim, padding: 4 }}><Icon name="chevronRight" size={16} style={{ transform: "rotate(180deg)" }} /></button>
+              <button
+                onClick={goToday}
+                style={{ padding: "5px 11px", borderRadius: 999, fontSize: 12.5, fontWeight: 700, color: COLORS.textDim, border: `1px solid ${COLORS.border}` }}
+              >
+                Сегодня
+              </button>
+              <button onClick={() => shift(1)} style={{ color: COLORS.textDim, padding: 4 }}><Icon name="chevronRight" size={16} /></button>
+            </div>
           </div>
         </div>
 
@@ -1315,8 +1317,8 @@ function CalendarView({
       </div>
 
       {/* Без срока — стратегические / долгосрочные задачи, не привязанные к дню */}
-      <div style={{ width: "100%" }} className="md:w-72 md:flex-shrink-0">
-        <div style={{ color: COLORS.textDim, fontSize: 13, fontWeight: 700, marginBottom: 10 }} className="flex items-center gap-2">
+      <div style={{ width: isMobile ? "100%" : 280, flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, color: COLORS.textDim, fontSize: 13, fontWeight: 700, marginBottom: 10 }}>
           <Icon name="circle" size={13} color={COLORS.textFaint} /> Без срока / стратегические <span style={{ color: COLORS.textFaint, fontWeight: 500 }}>{undated.length}</span>
         </div>
         {undated.length === 0 ? (
@@ -1347,15 +1349,16 @@ function MonthGrid({ anchor, today, tasksByDate, onPickDay }) {
   const gridStart = startOfWeekMonday(firstOfMonth);
   const days = Array.from({ length: 42 }, (_, i) => addDays(gridStart, i));
   const currentMonth = anchorD.getMonth();
+  const gridStyle = { display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 4 };
 
   return (
     <div>
-      <div className="grid grid-cols-7 gap-1 mb-1">
+      <div style={{ ...gridStyle, marginBottom: 4 }}>
         {WEEKDAYS_SHORT.map((w) => (
           <div key={w} style={{ color: COLORS.textFaint, fontSize: 11.5, fontWeight: 700, textAlign: "center", padding: "0 0 4px" }}>{w}</div>
         ))}
       </div>
-      <div className="grid grid-cols-7 gap-1">
+      <div style={gridStyle}>
         {days.map((d) => {
           const dD = parseDate(d);
           const inMonth = dD.getMonth() === currentMonth;
@@ -1366,19 +1369,20 @@ function MonthGrid({ anchor, today, tasksByDate, onPickDay }) {
               key={d}
               onClick={() => onPickDay(d)}
               style={{
-                textAlign: "left", minHeight: 66, borderRadius: 10, padding: "5px 6px",
+                textAlign: "left", minHeight: 66, minWidth: 0, borderRadius: 10, padding: "5px 6px",
                 background: isToday ? COLORS.accentSoft : COLORS.surface,
                 border: `1px solid ${isToday ? COLORS.accent : COLORS.border}`,
                 opacity: inMonth ? 1 : 0.4,
+                overflow: "hidden",
               }}
             >
               <div style={{ fontSize: 12, fontWeight: isToday ? 800 : 600, color: isToday ? COLORS.accent : COLORS.text }}>{dD.getDate()}</div>
-              <div className="flex flex-col gap-0.5 mt-1">
+              <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 4 }}>
                 {list.slice(0, 3).map((t) => {
                   const person = t.assignee ? PEOPLE[t.assignee] : null;
                   const dotColor = t.status === "done" ? COLORS.success : t.blocked ? COLORS.blocked : person ? person.color : COLORS.textFaint;
                   return (
-                    <div key={t.id} className="flex items-center gap-1" style={{ overflow: "hidden" }}>
+                    <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 4, overflow: "hidden" }}>
                       <span style={{ width: 5, height: 5, borderRadius: "50%", background: dotColor, flexShrink: 0 }} />
                       <span style={{ fontSize: 10.5, color: COLORS.textDim, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textDecoration: t.status === "done" ? "line-through" : "none" }}>
                         {t.title}
@@ -1410,6 +1414,15 @@ function App() {
   const [commentIds, setCommentIds] = useState(() => new Set());
   const [modal, setModal] = useState({ open: false, task: null });
   const [userPopoverOpen, setUserPopoverOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
+
+  useEffect(() => {
+    function onResize() {
+      setIsMobile(window.innerWidth < 768);
+    }
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1802,6 +1815,7 @@ function App() {
             commentIds={commentIds}
             toggleComments={toggleComments}
             rowProps={rowProps}
+            isMobile={isMobile}
           />
         ) : totalShown === 0 ? (
           <div className="flex flex-col items-center text-center" style={{ padding: "70px 20px", color: COLORS.textFaint }}>
