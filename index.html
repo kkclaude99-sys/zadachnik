@@ -13,10 +13,10 @@
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
-  html, body { background: #12151B; margin: 0; padding: 0; height: 100%; }
+  html, body { background: #0E1714; margin: 0; padding: 0; height: 100%; }
   #root { min-height: 100vh; }
   ::-webkit-scrollbar { width: 10px; height: 10px; }
-  ::-webkit-scrollbar-thumb { background: #2A3040; border-radius: 8px; }
+  ::-webkit-scrollbar-thumb { background: #284238; border-radius: 8px; }
   ::-webkit-scrollbar-track { background: transparent; }
 </style>
 </head>
@@ -30,32 +30,32 @@ const { useState, useEffect, useMemo, useCallback, useRef } = React;
    Токены
 --------------------------------------------------------- */
 const COLORS = {
-  bg: "#12151B",
-  bgHeader: "#161A21",
-  surface: "#1B2029",
-  surfaceRaised: "#212734",
-  border: "#2A3040",
-  borderSoft: "#232935",
-  text: "#E7E9EE",
-  textDim: "#9BA3B4",
-  textFaint: "#616B7E",
-  accent: "#5B8DEF",
-  accentSoft: "rgba(91,141,239,0.14)",
-  success: "#49B287",
-  successSoft: "rgba(73,178,135,0.14)",
+  bg: "#0E1714",
+  bgHeader: "#111D19",
+  surface: "#16241F",
+  surfaceRaised: "#1C2E28",
+  border: "#284238",
+  borderSoft: "#1F352D",
+  text: "#E6F5EF",
+  textDim: "#97B8AC",
+  textFaint: "#5E7D72",
+  accent: "#6EE7B7",
+  accentSoft: "rgba(110,231,183,0.14)",
+  success: "#3FBF7F",
+  successSoft: "rgba(63,191,127,0.14)",
   danger: "#E06767",
   dangerSoft: "rgba(224,103,103,0.14)",
   blocked: "#E8B84B",
   blockedSoft: "rgba(232,184,75,0.14)",
   deferred: "#8B90C4",
   deferredSoft: "rgba(139,144,196,0.14)",
-  cancelled: "#6B7284",
-  cancelledSoft: "rgba(107,114,132,0.14)",
+  cancelled: "#6A8279",
+  cancelledSoft: "rgba(106,130,121,0.14)",
 };
 
 const PEOPLE = {
   sasha: { name: "Саша", color: "#E0954F", initial: "С" },
-  kostya: { name: "Костя", color: "#5B8DEF", initial: "К" },
+  kostya: { name: "Костя", color: "#6EE7B7", initial: "К" },
   nikita: { name: "Никита", color: "#C77DFF", initial: "Н" },
 };
 const PEOPLE_LIST = ["sasha", "kostya", "nikita"];
@@ -73,9 +73,9 @@ const STATUS = {
   cancelled: { label: "Отменена", color: COLORS.cancelled },
 };
 
-const PROJECT_PALETTE = ["#4FB6C9", "#F2B705", "#E85D75", "#8BC34A", "#9B8AFB", "#5FD3A0", "#F2946B", "#6EC1E4", "#D889C4", "#B7CE63"];
+const PROJECT_PALETTE = ["#4FD1C5", "#F2C14E", "#F07A8A", "#9BE15D", "#A99CF5", "#7FE3C4", "#F5A47F", "#67C8E0", "#E08FCB", "#C6E07A"];
 const DEFAULT_PROJECTS = [
-  { id: "bar", code: "БАР", name: "Биржа авитологов", color: "#4FB6C9" },
+  { id: "bar", code: "БАР", name: "Биржа авитологов", color: "#4FD1C5" },
   { id: "ya", code: "ЯА", name: "Я — Авитолог", color: "#F2B705" },
   { id: "par", code: "ПРТ", name: "Партнёрка", color: "#E85D75" },
 ];
@@ -329,7 +329,7 @@ function Avatar({ personKey, size = 22 }) {
       title={p.name}
       style={{
         width: size, height: size, borderRadius: "50%",
-        background: p.color, color: "#111318",
+        background: p.color, color: "#0B1411",
         display: "flex", alignItems: "center", justifyContent: "center",
         fontSize: size * 0.46, fontWeight: 700, flexShrink: 0,
       }}
@@ -555,7 +555,7 @@ function ProjectDropdown({ projects, value, onChange, onCreate, allowAll }) {
                 disabled={!code.trim()}
                 style={{
                   flex: 1, background: code.trim() ? COLORS.accent : COLORS.border,
-                  color: code.trim() ? "#0D1117" : COLORS.textFaint,
+                  color: code.trim() ? "#06231A" : COLORS.textFaint,
                   borderRadius: 8, padding: "6px 0", fontSize: 12.5, fontWeight: 700,
                 }}
               >
@@ -615,7 +615,7 @@ function TaskModal({ initial, projects, onClose, onSave, onDelete, onCreateProje
     <div
       onMouseDown={onClose}
       style={{
-        position: "fixed", inset: 0, background: "rgba(8,10,14,0.6)",
+        position: "fixed", inset: 0, background: "rgba(5,12,10,0.65)",
         display: "flex", alignItems: "flex-end", justifyContent: "center",
         zIndex: 50, backdropFilter: "blur(2px)",
       }}
@@ -836,7 +836,7 @@ function TaskModal({ initial, projects, onClose, onSave, onDelete, onCreateProje
               onClick={handleSave}
               style={{
                 padding: "9px 18px", borderRadius: 10, fontSize: 14, fontWeight: 700,
-                color: "#0D1117", background: COLORS.accent,
+                color: "#06231A", background: COLORS.accent,
               }}
             >
               {isEdit ? "Сохранить" : "Добавить"}
@@ -915,7 +915,7 @@ function Comments({ task, expanded, onToggle, currentUser, onAdd }) {
               disabled={!text.trim()}
               style={{
                 background: text.trim() ? COLORS.accent : COLORS.border,
-                color: text.trim() ? "#0D1117" : COLORS.textFaint,
+                color: text.trim() ? "#06231A" : COLORS.textFaint,
                 borderRadius: 9, padding: "8px 12px", fontSize: 13, fontWeight: 700,
                 flexShrink: 0,
               }}
@@ -1739,7 +1739,7 @@ function App() {
               onClick={openNewTask}
               className="flex items-center gap-1.5"
               style={{
-                background: COLORS.accent, color: "#0D1117", borderRadius: 10,
+                background: COLORS.accent, color: "#06231A", borderRadius: 10,
                 padding: "8px 12px", fontSize: 13.5, fontWeight: 700,
               }}
             >
@@ -1845,8 +1845,8 @@ function App() {
         className="sm:hidden"
         style={{
           position: "fixed", right: 18, bottom: 18, width: 52, height: 52, borderRadius: "50%",
-          background: COLORS.accent, color: "#0D1117", display: "flex", alignItems: "center",
-          justifyContent: "center", boxShadow: "0 6px 18px rgba(91,141,239,0.4)", zIndex: 25,
+          background: COLORS.accent, color: "#06231A", display: "flex", alignItems: "center",
+          justifyContent: "center", boxShadow: "0 6px 18px rgba(110,231,183,0.35)", zIndex: 25,
         }}
         aria-label="Новая задача"
       >
