@@ -257,6 +257,8 @@ function Icon({ name, size = 16, color = "currentColor", style, className }) {
     case "archive": return <svg {...common}><rect x="2" y="3" width="20" height="5" rx="1" /><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8M10 12h4" /></svg>;
     case "ban": return <svg {...common}><circle cx="12" cy="12" r="10" /><line x1="4.93" y1="4.93" x2="19.07" y2="19.07" /></svg>;
     case "check": return <svg {...common}><path d="M20 6 9 17l-5-5" /></svg>;
+    case "bulb": return <svg {...common}><path d="M9 18h6M10 22h4" /><path d="M12 2a7 7 0 0 0-4 12.74V16h8v-1.26A7 7 0 0 0 12 2Z" /></svg>;
+    case "arrowRight": return <svg {...common}><path d="M5 12h14M13 6l6 6-6 6" /></svg>;
     default: return null;
   }
 }
@@ -576,7 +578,7 @@ function ProjectDropdown({ projects, value, onChange, onCreate, allowAll }) {
    Модалка создания / редактирования задачи
 --------------------------------------------------------- */
 function TaskModal({ initial, projects, onClose, onSave, onDelete, onCreateProject }) {
-  const isEdit = !!initial;
+  const isEdit = !!initial?.id;
   const [title, setTitle] = useState(initial?.title || "");
   const [desc, setDesc] = useState(initial?.desc || "");
   const [assignee, setAssignee] = useState(initial?.assignee || null);
@@ -1401,6 +1403,627 @@ function MonthGrid({ anchor, today, tasksByDate, onPickDay }) {
 }
 
 
+/* ---------------------------------------------------------
+   Идеи и еженедельные задачи — живут в той же таблице tasks,
+   отличаются префиксом id (idea_… / wk_…)
+--------------------------------------------------------- */
+const ITEM_KIND = {
+  task: { label: "Задачи", icon: "inbox" },
+  idea: { label: "Идеи", icon: "bulb" },
+  weekly: { label: "На неделю", icon: "repeat" },
+};
+function itemKind(item) {
+  if (item.id.startsWith("idea_")) return "idea";
+  if (item.id.startsWith("wk_")) return "weekly";
+  return "task";
+}
+function loadTab() {
+  try {
+    const v = localStorage.getItem("zadachnik_tab");
+    return ITEM_KIND[v] ? v : "task";
+  } catch (e) {
+    return "task";
+  }
+}
+function persistTab(v) {
+  try {
+    localStorage.setItem("zadachnik_tab", v);
+  } catch (e) {}
+}
+function weekRangeLabel(mondayStr) {
+  const a = parseDate(mondayStr);
+  const b = parseDate(addDays(mondayStr, 6));
+  if (a.getMonth() === b.getMonth()) return `${a.getDate()}–${b.getDate()} ${MONTHS_FULL[b.getMonth()]}`;
+  return `${a.getDate()} ${MONTHS_SHORT[a.getMonth()]} – ${b.getDate()} ${MONTHS_SHORT[b.getMonth()]}`;
+}
+function weekDoneEntry(item, mondayStr) {
+  return item.history?.find((h) => h.week === mondayStr) || null;
+}
+
+/* Строка быстрого добавления: ввёл текст — Enter — готово */
+function QuickAdd({ placeholder, onAdd, extra }) {
+  const [text, setText] = useState("");
+  function submit() {
+    if (!text.trim()) return;
+    onAdd(text.trim());
+    setText("");
+  }
+  return (
+    <div
+      className="flex items-center gap-2 mb-5"
+      style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 12, padding: "6px 6px 6px 12px" }}
+    >
+      <Icon name="plus" size={16} color={COLORS.textFaint} />
+      <input
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") submit();
+        }}
+        placeholder={placeholder}
+        style={{ flex: 1, minWidth: 0, background: "transparent", border: "none", outline: "none", color: COLORS.text, fontSize: 14.5, padding: "6px 0" }}
+      />
+      {extra}
+      <button
+        onClick={submit}
+        disabled={!text.trim()}
+        style={{
+          background: text.trim() ? COLORS.accent : COLORS.border,
+          color: text.trim() ? "#0D1117" : COLORS.textFaint,
+          borderRadius: 9, padding: "7px 10px", fontSize: 13, fontWeight: 700, flexShrink: 0,
+        }}
+        aria-label="Добавить"
+      >
+        <span className="hidden sm:inline">Добавить</span>
+        <Icon name="arrowRight" size={16} className="sm:hidden" />
+      </button>
+    </div>
+  );
+}
+
+function WeekdaySelect({ value, onChange, compact }) {
+  const [open, setOpen] = useState(false);
+  const label = value === null || value === undefined ? (compact ? "Любой" : "В любой день") : (compact ? WEEKDAYS_SHORT[value] : WEEKDAYS_FULL[value]);
+  return (
+    <Popover
+      open={open}
+      onOpenChange={setOpen}
+      align="right"
+      trigger={
+        <button
+          onClick={() => setOpen((s) => !s)}
+          className="flex items-center gap-1"
+          style={{
+            border: `1px solid ${COLORS.border}`, borderRadius: 999, padding: "5px 10px",
+            color: COLORS.textDim, fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap",
+          }}
+        >
+          <Icon name="calendar" size={12.5} /> {label} <Icon name="chevronDown" size={12} />
+        </button>
+      }
+    >
+      <PopoverItem active={value === null || value === undefined} onClick={() => { onChange(null); setOpen(false); }}>В любой день</PopoverItem>
+      {WEEKDAYS_FULL.map((d, i) => (
+        <PopoverItem key={i} active={value === i} onClick={() => { onChange(i); setOpen(false); }}>{d}</PopoverItem>
+      ))}
+    </Popover>
+  );
+}
+
+/* Модалка для идеи и еженедельной задачи */
+function ItemModal({ kind, initial, projects, currentUser, onClose, onSave, onDelete, onCreateProject }) {
+  const isEdit = !!initial;
+  const [title, setTitle] = useState(initial?.title || "");
+  const [desc, setDesc] = useState(initial?.desc || "");
+  const [assignee, setAssignee] = useState(initial ? initial.assignee : currentUser);
+  const [projectId, setProjectId] = useState(initial?.projectId || null);
+  const [day, setDay] = useState(initial?.recurring?.day ?? null);
+  const titleRef = useRef(null);
+  const isIdea = kind === "idea";
+
+  useEffect(() => {
+    titleRef.current?.focus();
+  }, []);
+
+  function handleSave() {
+    if (!title.trim()) {
+      titleRef.current?.focus();
+      return;
+    }
+    const data = { title: title.trim(), desc: desc.trim(), assignee, projectId };
+    if (!isIdea) data.recurring = { freq: "weekly", day };
+    onSave(data);
+  }
+
+  const fieldStyle = {
+    width: "100%", background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+    borderRadius: 10, padding: "10px 12px", color: COLORS.text, outline: "none",
+  };
+
+  return (
+    <div
+      onMouseDown={onClose}
+      style={{
+        position: "fixed", inset: 0, background: "rgba(8,10,14,0.6)",
+        display: "flex", alignItems: "flex-end", justifyContent: "center",
+        zIndex: 50, backdropFilter: "blur(2px)",
+      }}
+      className="sm:items-center"
+    >
+      <div
+        onMouseDown={(e) => e.stopPropagation()}
+        style={{
+          background: COLORS.surfaceRaised, border: `1px solid ${COLORS.border}`,
+          width: "100%", maxWidth: 520, maxHeight: "92vh", overflowY: "auto",
+          borderRadius: "16px 16px 0 0",
+        }}
+        className="sm:rounded-2xl p-5"
+      >
+        <div className="flex items-center justify-between mb-4">
+          <h2 style={{ color: COLORS.text, fontSize: 18, fontWeight: 700 }}>
+            {isIdea ? (isEdit ? "Изменить идею" : "Новая идея") : (isEdit ? "Изменить еженедельную задачу" : "Новая еженедельная задача")}
+          </h2>
+          <button onClick={onClose} style={{ color: COLORS.textFaint }} aria-label="Закрыть">
+            <Icon name="x" size={20} />
+          </button>
+        </div>
+
+        <label style={{ color: COLORS.textDim, fontSize: 13, fontWeight: 600 }} className="block mb-1.5">
+          {isIdea ? "Идея" : "Что делаем каждую неделю"}
+        </label>
+        <input
+          ref={titleRef}
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") handleSave(); }}
+          placeholder={isIdea ? "Например: запустить рассылку по старым клиентам" : "Например: отчёт по РК для клиентов"}
+          style={{ ...fieldStyle, fontSize: 15 }}
+          className="mb-4"
+        />
+
+        <label style={{ color: COLORS.textDim, fontSize: 13, fontWeight: 600 }} className="block mb-1.5">
+          {isIdea ? "Подробнее" : "Детали"}
+        </label>
+        <textarea
+          value={desc}
+          onChange={(e) => setDesc(e.target.value)}
+          rows={isIdea ? 4 : 2}
+          placeholder={isIdea ? "Зачем, что даст, с чего начать, ссылки" : "Необязательно — как делать, куда смотреть"}
+          style={{ ...fieldStyle, fontSize: 14, resize: "vertical" }}
+          className="mb-4"
+        />
+
+        <div className="flex items-center gap-3 mb-4 flex-wrap">
+          <div>
+            <label style={{ color: COLORS.textDim, fontSize: 13, fontWeight: 600 }} className="block mb-1.5">Проект</label>
+            <ProjectDropdown projects={projects} value={projectId} onChange={setProjectId} onCreate={onCreateProject} />
+          </div>
+          {!isIdea && (
+            <div>
+              <label style={{ color: COLORS.textDim, fontSize: 13, fontWeight: 600 }} className="block mb-1.5">День недели</label>
+              <WeekdaySelect value={day} onChange={setDay} />
+            </div>
+          )}
+        </div>
+
+        <label style={{ color: COLORS.textDim, fontSize: 13, fontWeight: 600 }} className="block mb-1.5">
+          {isIdea ? "Автор идеи" : "Ответственный"}
+        </label>
+        <div className="flex gap-2 mb-2 flex-wrap">
+          <button
+            onClick={() => setAssignee(null)}
+            style={{
+              padding: "6px 12px", borderRadius: 999, fontSize: 13, fontWeight: 600,
+              border: `1px solid ${assignee === null ? COLORS.accent : COLORS.border}`,
+              color: assignee === null ? COLORS.accent : COLORS.textDim,
+              background: assignee === null ? COLORS.accentSoft : "transparent",
+            }}
+          >
+            {isIdea ? "Без автора" : "Не назначено"}
+          </button>
+          {PEOPLE_LIST.map((k) => (
+            <button
+              key={k}
+              onClick={() => setAssignee(k)}
+              style={{
+                display: "flex", alignItems: "center", gap: 6, padding: "6px 12px 6px 6px",
+                borderRadius: 999, fontSize: 13, fontWeight: 600,
+                border: `1px solid ${assignee === k ? PEOPLE[k].color : COLORS.border}`,
+                color: assignee === k ? COLORS.text : COLORS.textDim,
+                background: assignee === k ? `${PEOPLE[k].color}22` : "transparent",
+              }}
+            >
+              <Avatar personKey={k} size={18} />
+              {PEOPLE[k].name}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex items-center justify-between mt-5 gap-2">
+          <div>
+            {isEdit && (
+              <button
+                onClick={() => onDelete(initial.id)}
+                style={{ color: COLORS.danger, fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}
+              >
+                <Icon name="trash" size={15} /> Удалить
+              </button>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={onClose}
+              style={{ padding: "9px 16px", borderRadius: 10, fontSize: 14, fontWeight: 600, color: COLORS.textDim, border: `1px solid ${COLORS.border}` }}
+            >
+              Отмена
+            </button>
+            <button
+              onClick={handleSave}
+              style={{ padding: "9px 18px", borderRadius: 10, fontSize: 14, fontWeight: 700, color: "#0D1117", background: COLORS.accent }}
+            >
+              {isEdit ? "Сохранить" : "Добавить"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
+   Лист идей
+--------------------------------------------------------- */
+function IdeaCard({ idea, project, linkedTask, commentsExpanded, onToggleComments, currentUser, onAddComment, onEdit, onToTask, onSetStatus }) {
+  const [open, setOpen] = useState(false);
+  const isActive = idea.status === "active";
+  const isTaken = idea.status === "done";
+  const isArchived = idea.status === "cancelled";
+  const author = idea.assignee ? PEOPLE[idea.assignee] : null;
+
+  return (
+    <div
+      style={{
+        background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+        borderLeft: `3px solid ${project?.color || (isTaken ? COLORS.success : COLORS.border)}`,
+        borderRadius: 12, padding: "11px 12px", marginBottom: 8, opacity: isArchived ? 0.65 : 1,
+      }}
+    >
+      <div className="flex items-start gap-2.5">
+        <Icon name="bulb" size={18} color={isActive ? COLORS.blocked : COLORS.textFaint} style={{ marginTop: 1, flexShrink: 0 }} />
+        <div className="flex-1 min-w-0" onClick={() => setOpen((o) => !o)} style={{ cursor: "pointer" }}>
+          <div className="flex items-center flex-wrap gap-x-2 gap-y-1">
+            {project && (
+              <Pill color={project.color} bg={`${project.color}20`} style={{ fontWeight: 800 }}>{project.code}</Pill>
+            )}
+            <span style={{ color: isActive ? COLORS.text : COLORS.textDim, fontSize: 14.5, fontWeight: 600, lineHeight: 1.3 }}>
+              {idea.title}
+            </span>
+            {idea.comments.length > 0 && (
+              <Pill><Icon name="message" size={11} /> {idea.comments.length}</Pill>
+            )}
+          </div>
+          {idea.desc && !open && (
+            <p
+              style={{
+                color: COLORS.textDim, fontSize: 13, lineHeight: 1.45, marginTop: 4,
+                display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden",
+              }}
+            >
+              {idea.desc}
+            </p>
+          )}
+          <div className="flex items-center flex-wrap gap-x-3 gap-y-1 mt-1.5" style={{ fontSize: 12.5, color: COLORS.textFaint }}>
+            {author && (
+              <span className="flex items-center gap-1.5" style={{ color: COLORS.textDim }}>
+                <Avatar personKey={idea.assignee} size={16} /> {author.name}
+              </span>
+            )}
+            {idea.createdAt && <span>записана {humanDate(fmtLocal(new Date(idea.createdAt)))}</span>}
+            {isTaken && (
+              <span style={{ color: COLORS.success, fontWeight: 600 }}>
+                <Icon name="check" size={12} style={{ display: "inline", verticalAlign: -2 }} /> в задачах
+                {linkedTask && linkedTask.status === "done" ? " · сделано" : ""}
+              </span>
+            )}
+          </div>
+        </div>
+        <button onClick={() => setOpen((o) => !o)} style={{ color: COLORS.textFaint, marginTop: 2, flexShrink: 0 }}>
+          {open ? <Icon name="chevronDown" size={18} /> : <Icon name="chevronRight" size={18} />}
+        </button>
+      </div>
+
+      {open && (
+        <div style={{ marginTop: 10, paddingLeft: 28 }}>
+          {idea.desc && (
+            <p style={{ color: COLORS.textDim, fontSize: 13.5, lineHeight: 1.5, whiteSpace: "pre-wrap" }} className="mb-2.5">
+              {idea.desc}
+            </p>
+          )}
+          <div className="flex items-center gap-3 mb-1 flex-wrap">
+            {isActive && (
+              <button
+                onClick={() => onToTask(idea)}
+                className="flex items-center gap-1"
+                style={{ color: "#0D1117", background: COLORS.accent, borderRadius: 8, padding: "4px 10px", fontSize: 12.5, fontWeight: 700 }}
+              >
+                <Icon name="arrowRight" size={13} /> Взять в работу
+              </button>
+            )}
+            <button onClick={() => onEdit(idea)} className="flex items-center gap-1" style={{ color: COLORS.textDim, fontSize: 12.5, fontWeight: 600 }}>
+              <Icon name="pencil" size={13} /> Изменить
+            </button>
+            {isActive ? (
+              <button onClick={() => onSetStatus(idea, "cancelled")} className="flex items-center gap-1" style={{ color: COLORS.textDim, fontSize: 12.5, fontWeight: 600 }}>
+                <Icon name="archive" size={13} /> В архив
+              </button>
+            ) : (
+              <button onClick={() => onSetStatus(idea, "active")} className="flex items-center gap-1" style={{ color: COLORS.textDim, fontSize: 12.5, fontWeight: 600 }}>
+                <Icon name="bulb" size={13} /> Вернуть в идеи
+              </button>
+            )}
+          </div>
+          <Comments task={idea} expanded={commentsExpanded} onToggle={onToggleComments} currentUser={currentUser} onAdd={onAddComment} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function IdeasView({ ideas, tasks, projectById, currentUser, commentIds, toggleComments, onAddComment, onQuickAdd, onEdit, onToTask, onSetStatus }) {
+  const byCreated = (a, b) => (b.createdAt || "").localeCompare(a.createdAt || "");
+  const active = ideas.filter((i) => i.status === "active").sort(byCreated);
+  const taken = ideas.filter((i) => i.status === "done").sort((a, b) => (b.completedAt || "").localeCompare(a.completedAt || ""));
+  const archived = ideas.filter((i) => i.status === "cancelled").sort(byCreated);
+  const taskById = useMemo(() => Object.fromEntries(tasks.map((t) => [t.id, t])), [tasks]);
+
+  function renderList(list) {
+    return list.map((i) => (
+      <IdeaCard
+        key={i.id}
+        idea={i}
+        project={i.projectId ? projectById[i.projectId] : null}
+        linkedTask={i.history?.[0]?.taskId ? taskById[i.history[0].taskId] : null}
+        commentsExpanded={commentIds.has(i.id)}
+        onToggleComments={() => toggleComments(i.id)}
+        currentUser={currentUser}
+        onAddComment={onAddComment}
+        onEdit={onEdit}
+        onToTask={onToTask}
+        onSetStatus={onSetStatus}
+      />
+    ));
+  }
+
+  return (
+    <>
+      <p style={{ color: COLORS.textFaint, fontSize: 13, marginBottom: 10 }}>
+        Мысли «в долгую»: без сроков и исполнителей. Созреет — жмите «Взять в работу», идея станет задачей.
+      </p>
+      <QuickAdd placeholder="Записать идею…" onAdd={onQuickAdd} />
+      {ideas.length === 0 ? (
+        <div className="flex flex-col items-center text-center" style={{ padding: "50px 20px", color: COLORS.textFaint }}>
+          <Icon name="bulb" size={30} style={{ marginBottom: 10, opacity: 0.6 }} />
+          <p style={{ fontSize: 14.5, color: COLORS.textDim, fontWeight: 600 }}>Идей пока нет</p>
+          <p style={{ fontSize: 13, marginTop: 4 }}>Запишите первую строкой выше — уточнить можно потом.</p>
+        </div>
+      ) : (
+        <>
+          {active.length > 0 ? (
+            <SectionBlock title="Идеи" tone={COLORS.text} icon={<Icon name="bulb" size={13} color={COLORS.blocked} />} count={active.length} defaultOpen>
+              {renderList(active)}
+            </SectionBlock>
+          ) : (
+            <p style={{ color: COLORS.textFaint, fontSize: 13.5, marginBottom: 20 }}>Все идеи разобраны.</p>
+          )}
+          {taken.length > 0 && (
+            <SectionBlock title="Взяты в работу" tone={COLORS.success} icon={<Icon name="checkCircle" size={13} color={COLORS.success} />} count={taken.length} defaultOpen={false}>
+              {renderList(taken)}
+            </SectionBlock>
+          )}
+          {archived.length > 0 && (
+            <SectionBlock title="Архив" tone={COLORS.cancelled} icon={<Icon name="archive" size={13} color={COLORS.cancelled} />} count={archived.length} defaultOpen={false}>
+              {renderList(archived)}
+            </SectionBlock>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
+/* ---------------------------------------------------------
+   Лист еженедельных задач
+--------------------------------------------------------- */
+const WEEK_HISTORY_LEN = 6;
+
+function WeeklyRow({ item, project, monday, today, onToggle, onEdit }) {
+  const done = weekDoneEntry(item, monday);
+  const day = item.recurring?.day;
+  const dayDate = day === null || day === undefined ? null : addDays(monday, day);
+  const missed = !done && (dayDate ? dayDate < today : addDays(monday, 6) < today);
+  const createdWeek = item.createdAt ? startOfWeekMonday(fmtLocal(new Date(item.createdAt))) : null;
+  const pastWeeks = Array.from({ length: WEEK_HISTORY_LEN }, (_, i) => addDays(monday, -7 * (WEEK_HISTORY_LEN - i)));
+  const person = item.assignee ? PEOPLE[item.assignee] : null;
+
+  return (
+    <div
+      style={{
+        background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+        borderLeft: `3px solid ${done ? COLORS.success : missed ? COLORS.danger : person?.color || COLORS.border}`,
+        borderRadius: 12, padding: "10px 12px", marginBottom: 8,
+      }}
+    >
+      <div className="flex items-start gap-2.5">
+        <button
+          onClick={() => onToggle(item)}
+          title={done ? "Снять отметку за эту неделю" : "Отметить выполненной на этой неделе"}
+          style={{ marginTop: 1, flexShrink: 0, color: done ? COLORS.success : missed ? COLORS.danger : COLORS.textFaint }}
+        >
+          {done ? <Icon name="checkCircle" size={20} /> : <Icon name="circle" size={20} />}
+        </button>
+        <div className="flex-1 min-w-0" onClick={() => onEdit(item)} style={{ cursor: "pointer" }}>
+          <div className="flex items-center flex-wrap gap-x-2 gap-y-1">
+            {project && (
+              <Pill color={project.color} bg={`${project.color}20`} style={{ fontWeight: 800 }}>{project.code}</Pill>
+            )}
+            <span
+              style={{
+                color: done ? COLORS.textFaint : COLORS.text, textDecoration: done ? "line-through" : "none",
+                fontSize: 14.5, fontWeight: 600, lineHeight: 1.3,
+              }}
+            >
+              {item.title}
+            </span>
+          </div>
+          <div className="flex items-center flex-wrap gap-x-3 gap-y-1 mt-1" style={{ fontSize: 12.5 }}>
+            {person && (
+              <span className="flex items-center gap-1.5" style={{ color: COLORS.textDim }}>
+                <Avatar personKey={item.assignee} size={16} /> {person.name}
+              </span>
+            )}
+            {done && (
+              <span style={{ color: COLORS.success }}>
+                сделано {humanDate(fmtLocal(new Date(done.at)))}{done.by && done.by !== item.assignee && PEOPLE[done.by] ? ` · отметка: ${PEOPLE[done.by].name}` : ""}
+              </span>
+            )}
+            {missed && <span style={{ color: COLORS.danger, fontWeight: 700 }}>не сделано в срок</span>}
+            {item.desc && <span style={{ color: COLORS.textFaint }} className="truncate" title={item.desc}>{item.desc}</span>}
+          </div>
+        </div>
+        <div className="flex items-center gap-1" title={`Прошлые ${WEEK_HISTORY_LEN} недель`} style={{ marginTop: 5, flexShrink: 0 }}>
+          {pastWeeks.map((w) => {
+            const notYet = createdWeek && w < createdWeek;
+            const hit = !!weekDoneEntry(item, w);
+            return (
+              <span
+                key={w}
+                title={`${weekRangeLabel(w)}: ${notYet ? "задачи ещё не было" : hit ? "сделано" : "не сделано"}`}
+                style={{
+                  width: 9, height: 9, borderRadius: 3,
+                  background: notYet ? "transparent" : hit ? COLORS.success : COLORS.dangerSoft,
+                  border: `1px solid ${notYet ? COLORS.borderSoft : hit ? COLORS.success : "rgba(224,103,103,0.35)"}`,
+                }}
+              />
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WeeklyView({ items, projectById, currentUser, onToggle, onEdit, onQuickAdd }) {
+  const today = todayStr();
+  const thisMonday = startOfWeekMonday(today);
+  const [monday, setMonday] = useState(thisMonday);
+  const [quickDay, setQuickDay] = useState(null);
+  const isThisWeek = monday === thisMonday;
+  const todayIdx = (parseDate(today).getDay() + 6) % 7;
+
+  const doneCount = items.filter((i) => weekDoneEntry(i, monday)).length;
+  const pct = items.length ? Math.round((doneCount / items.length) * 100) : 0;
+  const perPerson = PEOPLE_LIST.map((k) => {
+    const mine = items.filter((i) => i.assignee === k);
+    return { k, total: mine.length, done: mine.filter((i) => weekDoneEntry(i, monday)).length };
+  }).filter((p) => p.total > 0);
+
+  const byTitle = (a, b) => a.title.localeCompare(b.title, "ru");
+  const groups = [
+    ...WEEKDAYS_FULL.map((name, idx) => ({ key: idx, name, list: items.filter((i) => i.recurring?.day === idx).sort(byTitle) })),
+    { key: "any", name: "В любой день недели", list: items.filter((i) => i.recurring?.day === null || i.recurring?.day === undefined).sort(byTitle) },
+  ].filter((g) => g.list.length > 0);
+
+  const navBtn = { border: `1px solid ${COLORS.border}`, borderRadius: 9, padding: "5px 8px", color: COLORS.textDim };
+
+  return (
+    <>
+      <div style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: 14, padding: "12px 14px" }} className="mb-4">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2">
+            <button onClick={() => setMonday(addDays(monday, -7))} style={navBtn} aria-label="Прошлая неделя">
+              <Icon name="chevronRight" size={15} style={{ transform: "rotate(180deg)" }} />
+            </button>
+            <div>
+              <div style={{ color: COLORS.text, fontSize: 15.5, fontWeight: 800 }}>
+                {isThisWeek ? "Эта неделя" : monday < thisMonday ? "Прошлая неделя" : "Следующая неделя"}
+              </div>
+              <div style={{ color: COLORS.textFaint, fontSize: 12.5 }}>{weekRangeLabel(monday)}</div>
+            </div>
+            <button onClick={() => setMonday(addDays(monday, 7))} style={navBtn} aria-label="Следующая неделя">
+              <Icon name="chevronRight" size={15} />
+            </button>
+            {!isThisWeek && (
+              <button onClick={() => setMonday(thisMonday)} style={{ ...navBtn, fontSize: 12.5, fontWeight: 600 }}>К текущей</button>
+            )}
+          </div>
+          <div style={{ color: doneCount === items.length && items.length > 0 ? COLORS.success : COLORS.text, fontSize: 20, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>
+            {doneCount}<span style={{ color: COLORS.textFaint, fontSize: 14, fontWeight: 600 }}> / {items.length}</span>
+          </div>
+        </div>
+        <div style={{ height: 6, background: COLORS.border, borderRadius: 999, marginTop: 10, overflow: "hidden" }}>
+          <div style={{ height: "100%", width: `${pct}%`, background: COLORS.success, borderRadius: 999, transition: "width .25s" }} />
+        </div>
+        {perPerson.length > 0 && (
+          <div className="flex items-center gap-3 flex-wrap mt-2.5">
+            {perPerson.map((p) => (
+              <span key={p.k} className="flex items-center gap-1.5" style={{ fontSize: 12.5, color: p.done === p.total ? COLORS.success : COLORS.textDim, fontWeight: 600 }}>
+                <Avatar personKey={p.k} size={16} /> {p.done}/{p.total}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <QuickAdd
+        placeholder="Задача на неделю…"
+        onAdd={(title) => onQuickAdd(title, quickDay)}
+        extra={<WeekdaySelect value={quickDay} onChange={setQuickDay} compact />}
+      />
+
+      {items.length === 0 ? (
+        <div className="flex flex-col items-center text-center" style={{ padding: "50px 20px", color: COLORS.textFaint }}>
+          <Icon name="repeat" size={30} style={{ marginBottom: 10, opacity: 0.6 }} />
+          <p style={{ fontSize: 14.5, color: COLORS.textDim, fontWeight: 600 }}>Регулярных задач пока нет</p>
+          <p style={{ fontSize: 13, marginTop: 4 }}>Добавьте то, что делается каждую неделю: отчёты, созвоны, проверки.</p>
+        </div>
+      ) : (
+        groups.map((g) => {
+          const isToday = isThisWeek && g.key === todayIdx;
+          const gDone = g.list.filter((i) => weekDoneEntry(i, monday)).length;
+          return (
+            <div key={g.key} className="mb-4">
+              <div className="flex items-center gap-2 mb-2">
+                <span style={{ color: isToday ? COLORS.accent : COLORS.textDim, fontSize: 13, fontWeight: 700, letterSpacing: 0.2 }}>{g.name}</span>
+                {typeof g.key === "number" && (
+                  <span style={{ color: COLORS.textFaint, fontSize: 12 }}>
+                    {parseDate(addDays(monday, g.key)).getDate()} {MONTHS_SHORT[parseDate(addDays(monday, g.key)).getMonth()]}
+                  </span>
+                )}
+                {isToday && <Pill color={COLORS.accent} bg={COLORS.accentSoft}>сегодня</Pill>}
+                <span style={{ color: gDone === g.list.length ? COLORS.success : COLORS.textFaint, fontSize: 12.5, marginLeft: "auto" }}>
+                  {gDone}/{g.list.length}
+                </span>
+              </div>
+              {g.list.map((i) => (
+                <WeeklyRow
+                  key={i.id}
+                  item={i}
+                  project={i.projectId ? projectById[i.projectId] : null}
+                  monday={monday}
+                  today={today}
+                  onToggle={(it) => { if (monday <= thisMonday) onToggle(it, monday); }}
+                  onEdit={onEdit}
+                />
+              ))}
+            </div>
+          );
+        })
+      )}
+    </>
+  );
+}
+
+
 function App() {
   const [tasks, setTasks] = useState([]);
   const [projects, setProjects] = useState(DEFAULT_PROJECTS);
@@ -1413,6 +2036,8 @@ function App() {
   const [expandedIds, setExpandedIds] = useState(() => new Set());
   const [commentIds, setCommentIds] = useState(() => new Set());
   const [modal, setModal] = useState({ open: false, task: null });
+  const [tab, setTab] = useState(loadTab);
+  const [itemModal, setItemModal] = useState({ open: false, kind: null, item: null });
   const [userPopoverOpen, setUserPopoverOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
 
@@ -1515,7 +2140,7 @@ function App() {
   }
 
   function saveTask(data) {
-    if (modal.task) {
+    if (modal.task?.id) {
       commitTask({ ...modal.task, ...data });
     } else {
       const newTask = {
@@ -1528,6 +2153,9 @@ function App() {
       };
       setTasks((prev) => [newTask, ...prev]);
       persistTask(newTask);
+      if (modal.fromIdea) {
+        commitTask({ ...modal.fromIdea, status: "done", completedAt: new Date().toISOString(), history: [{ taskId: newTask.id }] });
+      }
     }
     setModal({ open: false, task: null });
   }
@@ -1583,6 +2211,67 @@ function App() {
     setCommentIds((prev) => new Set(prev).add(taskId));
   }
 
+  function switchTab(v) {
+    setTab(v);
+    persistTab(v);
+  }
+
+  /* --------- идеи и еженедельные задачи --------- */
+  function createItem(kind, data) {
+    const item = {
+      id: uid(kind === "idea" ? "idea" : "wk"),
+      desc: "", assignee: null, projectId: null, dueDate: null, recurring: null,
+      ...data,
+      status: "active", progress: 0, blocked: null,
+      createdAt: new Date().toISOString(), completedAt: null,
+      history: [], comments: [],
+    };
+    setTasks((prev) => [item, ...prev]);
+    persistTask(item);
+  }
+  function quickAddIdea(title) {
+    createItem("idea", { title, assignee: currentUser, projectId: filterProject });
+  }
+  function quickAddWeekly(title, day) {
+    const assignee = filterAssignee.length === 1 ? filterAssignee[0] : currentUser;
+    createItem("weekly", { title, assignee, projectId: filterProject, recurring: { freq: "weekly", day } });
+  }
+  function openItemModal(kind, item = null) {
+    setItemModal({ open: true, kind, item });
+  }
+  function closeItemModal() {
+    setItemModal({ open: false, kind: null, item: null });
+  }
+  function saveItem(data) {
+    if (itemModal.item) commitTask({ ...itemModal.item, ...data });
+    else createItem(itemModal.kind, data);
+    closeItemModal();
+  }
+  function deleteItem(id) {
+    setTasks((prev) => prev.filter((t) => t.id !== id));
+    removeTaskRow(id);
+    closeItemModal();
+  }
+  function setIdeaStatus(idea, status) {
+    commitTask({ ...idea, status, completedAt: status === "done" ? new Date().toISOString() : null });
+  }
+  function ideaToTask(idea) {
+    setModal({
+      open: true,
+      task: { title: idea.title, desc: idea.desc, projectId: idea.projectId, assignee: idea.assignee, status: "active" },
+      fromIdea: idea,
+    });
+  }
+  function toggleWeekly(item, monday) {
+    const done = weekDoneEntry(item, monday);
+    commitTask({
+      ...item,
+      history: done
+        ? item.history.filter((h) => h.week !== monday)
+        : [...item.history, { week: monday, by: currentUser, at: new Date().toISOString() }],
+    });
+  }
+
   function pickUser(key) {
     setCurrentUser(key);
     persistCurrentUser(key);
@@ -1591,9 +2280,20 @@ function App() {
 
   const projectById = useMemo(() => Object.fromEntries(projects.map((p) => [p.id, p])), [projects]);
 
+  const { plainTasks, ideas, weeklyItems } = useMemo(() => {
+    const out = { plainTasks: [], ideas: [], weeklyItems: [] };
+    for (const t of tasks) {
+      const k = itemKind(t);
+      (k === "idea" ? out.ideas : k === "weekly" ? out.weeklyItems : out.plainTasks).push(t);
+    }
+    return out;
+  }, [tasks]);
+  const matchesFilters = (t) =>
+    (filterAssignee.length === 0 || filterAssignee.includes(t.assignee)) && (!filterProject || t.projectId === filterProject);
+
   /* --------- фильтрация и группировка --------- */
   const filtered = useMemo(() => {
-    return tasks.filter((t) => {
+    return plainTasks.filter((t) => {
       if (filterAssignee.length > 0 && !filterAssignee.includes(t.assignee)) return false;
       if (filterProject && t.projectId !== filterProject) return false;
       if (filterStatus === "active" && t.status !== "active") return false;
@@ -1601,7 +2301,7 @@ function App() {
       if (filterStatus === "done" && t.status !== "done") return false;
       return true;
     });
-  }, [tasks, filterAssignee, filterProject, filterStatus]);
+  }, [plainTasks, filterAssignee, filterProject, filterStatus]);
 
   const groups = useMemo(() => {
     const today = todayStr();
@@ -1631,14 +2331,14 @@ function App() {
 
   const stats = useMemo(() => {
     const today = todayStr();
-    const active = tasks.filter((t) => t.status === "active");
+    const active = plainTasks.filter((t) => t.status === "active");
     return {
       active: active.length,
       overdue: active.filter((t) => !t.blocked && t.dueDate && t.dueDate < today).length,
       today: active.filter((t) => !t.blocked && t.dueDate === today).length,
       blocked: active.filter((t) => t.blocked).length,
     };
-  }, [tasks]);
+  }, [plainTasks]);
 
   const rowProps = {
     currentUser,
@@ -1672,6 +2372,11 @@ function App() {
         })}
       </SectionBlock>
     );
+  }
+
+  function onPrimaryAdd() {
+    if (tab === "task") openNewTask();
+    else openItemModal(tab);
   }
 
   const showActiveGroups = filterStatus === "active" || filterStatus === "all";
@@ -1736,20 +2441,55 @@ function App() {
             </Popover>
 
             <button
-              onClick={openNewTask}
+              onClick={onPrimaryAdd}
               className="flex items-center gap-1.5"
               style={{
                 background: COLORS.accent, color: "#0D1117", borderRadius: 10,
                 padding: "8px 12px", fontSize: 13.5, fontWeight: 700,
               }}
             >
-              <Icon name="plus" size={16} /> <span className="hidden sm:inline">Задача</span>
+              <Icon name="plus" size={16} /> <span className="hidden sm:inline">{tab === "idea" ? "Идея" : tab === "weekly" ? "На неделю" : "Задача"}</span>
             </button>
           </div>
         </div>
 
+        {/* Вкладки */}
+        <div className="max-w-3xl mx-auto px-4 flex items-end gap-1" style={{ overflowX: "auto" }}>
+          {Object.entries(ITEM_KIND).map(([k, v]) => {
+            const count = k === "idea"
+              ? ideas.filter((i) => i.status === "active").length
+              : k === "weekly"
+                ? weeklyItems.length - weeklyItems.filter((i) => weekDoneEntry(i, startOfWeekMonday(todayStr()))).length
+                : stats.active;
+            const on = tab === k;
+            return (
+              <button
+                key={k}
+                onClick={() => switchTab(k)}
+                className="flex items-center gap-1.5"
+                style={{
+                  padding: "8px 12px 9px", fontSize: 14, fontWeight: 700, whiteSpace: "nowrap",
+                  color: on ? COLORS.text : COLORS.textFaint,
+                  borderBottom: `2px solid ${on ? COLORS.accent : "transparent"}`,
+                }}
+              >
+                <Icon name={v.icon} size={15} color={on ? COLORS.accent : COLORS.textFaint} />
+                {v.label}
+                {count > 0 && (
+                  <span style={{ fontSize: 11.5, fontWeight: 700, padding: "0 6px", borderRadius: 999, background: on ? COLORS.accentSoft : COLORS.surfaceRaised, color: on ? COLORS.accent : COLORS.textFaint }}>
+                    {count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+        <div style={{ borderTop: `1px solid ${COLORS.borderSoft}` }} />
+
         {/* Фильтры */}
-        <div className="max-w-3xl mx-auto px-4 pb-3 flex items-center gap-2 flex-wrap">
+        <div className="max-w-3xl mx-auto px-4 pt-3 pb-3 flex items-center gap-2 flex-wrap">
+          {tab === "task" && (
+          <>
           <div className="flex items-center gap-1.5">
             {["list", "calendar"].map((v) => (
               <button
@@ -1769,7 +2509,9 @@ function App() {
             ))}
           </div>
           <div style={{ width: 1, height: 16, background: COLORS.border }} />
-          {viewMode === "list" && (
+          </>
+          )}
+          {tab === "task" && viewMode === "list" && (
             <>
               <div className="flex items-center gap-1.5">
                 {["active", "deferred", "done", "all"].map((s) => (
@@ -1796,15 +2538,38 @@ function App() {
       </header>
 
       {/* Контент */}
-      <main className={viewMode === "calendar" ? "max-w-5xl mx-auto px-4 py-5" : "max-w-3xl mx-auto px-4 py-5"} style={{ paddingBottom: 90 }}>
+      <main className={tab === "task" && viewMode === "calendar" ? "max-w-5xl mx-auto px-4 py-5" : "max-w-3xl mx-auto px-4 py-5"} style={{ paddingBottom: 90 }}>
         {loading ? (
           <div className="flex items-center justify-center" style={{ padding: "60px 0", color: COLORS.textFaint }}>
             <Icon name="loader" size={20} className="animate-spin" />
             <span className="ml-2" style={{ fontSize: 14 }}>Загружаем задачи…</span>
           </div>
+        ) : tab === "idea" ? (
+          <IdeasView
+            ideas={ideas.filter(matchesFilters)}
+            tasks={plainTasks}
+            projectById={projectById}
+            currentUser={currentUser}
+            commentIds={commentIds}
+            toggleComments={toggleComments}
+            onAddComment={addComment}
+            onQuickAdd={quickAddIdea}
+            onEdit={(i) => openItemModal("idea", i)}
+            onToTask={ideaToTask}
+            onSetStatus={setIdeaStatus}
+          />
+        ) : tab === "weekly" ? (
+          <WeeklyView
+            items={weeklyItems.filter(matchesFilters)}
+            projectById={projectById}
+            currentUser={currentUser}
+            onToggle={toggleWeekly}
+            onEdit={(i) => openItemModal("weekly", i)}
+            onQuickAdd={quickAddWeekly}
+          />
         ) : viewMode === "calendar" ? (
           <CalendarView
-            tasks={tasks}
+            tasks={plainTasks}
             projectById={projectById}
             currentUser={currentUser}
             filterAssignee={filterAssignee}
@@ -1841,7 +2606,7 @@ function App() {
 
       {/* Плавающая кнопка на мобильных */}
       <button
-        onClick={openNewTask}
+        onClick={onPrimaryAdd}
         className="sm:hidden"
         style={{
           position: "fixed", right: 18, bottom: 18, width: 52, height: 52, borderRadius: "50%",
@@ -1852,6 +2617,19 @@ function App() {
       >
         <Icon name="plus" size={24} />
       </button>
+
+      {itemModal.open && (
+        <ItemModal
+          kind={itemModal.kind}
+          initial={itemModal.item}
+          projects={projects}
+          currentUser={currentUser}
+          onClose={closeItemModal}
+          onSave={saveItem}
+          onDelete={deleteItem}
+          onCreateProject={addProject}
+        />
+      )}
 
       {modal.open && (
         <TaskModal
