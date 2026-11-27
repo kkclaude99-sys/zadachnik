@@ -1,0 +1,7 @@
+# Caddy сам получает бесплатный сертификат HTTPS (замок в адресной строке).
+# Замените zadachnik.example.ru на свой домен.
+zadachnik.example.ru {
+	reverse_proxy localhost:3000 {
+		header_up X-Real-IP {remote_host}
+	}
+}
