@@ -25,8 +25,7 @@ function columnFor(t) {
   if (t.status === "done" || t.status === "cancelled") return "done";
   if (t.status === "deferred") return "idea";
   if (t.blocked) return "waiting";
-  if (t.progress > 0) return "doing";
-  return "todo";
+  return "doing";
 }
 
 (async () => {
@@ -56,8 +55,8 @@ function columnFor(t) {
     const status = columnFor(t);
     const createdAt = t.created_at || new Date().toISOString();
     const statusAt = status === "done" && t.completed_at ? t.completed_at : createdAt;
-    const history = [{ at: createdAt, by: null, from: null, to: "todo", note: "из старого задачника" }];
-    if (status !== "todo") history.push({ at: statusAt, by: null, from: "todo", to: status, note: "из старого задачника" });
+    const history = [{ at: createdAt, by: null, from: null, to: status === "done" ? "doing" : status, note: "из старого задачника" }];
+    if (status === "done") history.push({ at: statusAt, by: null, from: "doing", to: "done", note: "из старого задачника" });
     board.cards.push({
       id,
       title: t.title,

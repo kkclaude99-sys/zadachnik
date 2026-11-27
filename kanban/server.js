@@ -22,7 +22,7 @@ const TEAM_PASSWORD = process.env.TEAM_PASSWORD || "";
 const COOKIE = "zk_session";
 const SESSION_DAYS = 60;
 
-const STATUSES = ["idea", "todo", "doing", "waiting", "done"];
+const STATUSES = ["idea", "doing", "waiting", "done"];
 
 /* ---------------------------------------------------------
    Хранилище
@@ -48,6 +48,10 @@ function defaultBoard() {
 fs.mkdirSync(BACKUP_DIR, { recursive: true });
 let board = fs.existsSync(DATA_FILE) ? JSON.parse(fs.readFileSync(DATA_FILE, "utf8")) : defaultBoard();
 if (!board.secret) board.secret = crypto.randomBytes(32).toString("hex");
+// Колонку «К работе» убрали: такие карточки переезжают в «В работе».
+for (const c of board.cards) {
+  if (c.status === "todo") moveCard(c, "doing", null, "колонка «К работе» убрана");
+}
 save();
 
 // Запись через временный файл: если сервер упадёт посреди записи, старые данные не испортятся.
@@ -73,7 +77,7 @@ dailyBackup();
 setInterval(dailyBackup, 60 * 60 * 1000);
 
 /* ---------------------------------------------------------
-   Еженедельные задачи: в новый понедельник «Готово» → «К работе»
+   Еженедельные задачи: в новый понедельник «Готово» → «В работе»
 --------------------------------------------------------- */
 function mondayOf(date) {
   const d = new Date(date);
@@ -86,7 +90,7 @@ function resetWeekly() {
   let changed = false;
   for (const c of board.cards) {
     if (c.weekly && c.status === "done" && !c.archived && mondayOf(c.statusAt) < thisMonday) {
-      moveCard(c, "todo", null, "новая неделя");
+      moveCard(c, "doing", null, "новая неделя");
       changed = true;
     }
   }
@@ -223,7 +227,7 @@ async function handleApi(req, res, pathname) {
 
   if (pathname === "/api/cards" && method === "POST") {
     const body = await readBody(req);
-    const status = STATUSES.includes(body.status) ? body.status : "todo";
+    const status = STATUSES.includes(body.status) ? body.status : "doing";
     const now = new Date().toISOString();
     const card = {
       id: uid("c"), title: "", desc: "", assignee: null, projectId: null, due: null,

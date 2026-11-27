@@ -5,12 +5,13 @@
 --------------------------------------------------------- */
 const COLUMNS = [
   { id: "idea", name: "Идеи", color: "#9B8AFB", hint: "в долгую" },
-  { id: "todo", name: "К работе", color: "#9BA3B4" },
   { id: "doing", name: "В работе", color: "#5B8DEF" },
   { id: "waiting", name: "Ждёт", color: "#E8B84B", hint: "чего-то не хватает" },
   { id: "done", name: "Готово", color: "#49B287" },
 ];
 const COLUMN_BY_ID = Object.fromEntries(COLUMNS.map((c) => [c.id, c]));
+// Колонки «К работе» больше нет, но в старой истории карточек она может встречаться.
+const statusName = (id) => COLUMN_BY_ID[id]?.name || { todo: "К работе" }[id] || id;
 const DONE_VISIBLE_DAYS = 14; // в «Готово» показываем только свежие карточки
 const LONG_IN_STATUS_DAYS = 5; // столько дней «В работе»/«Ждёт» — уже повод присмотреться
 const POLL_MS = 4000;
@@ -364,7 +365,7 @@ function renderCard(c) {
   const border = c.status === "waiting" ? COLUMN_BY_ID.waiting.color : who?.color || "var(--border)";
   return `
     <article class="card ${isDone ? "done" : ""} ${c.archived ? "archived" : ""}" draggable="true" data-card="${c.id}" style="border-left-color:${border}">
-      ${p || c.weekly ? `<div class="tags">${projectPill(p)}${c.weekly ? `<span class="pill" style="color:var(--accent);background:var(--accent-soft)" title="Каждую неделю: в понедельник вернётся в «К работе»">${icon("repeat", 11)} неделя</span>` : ""}</div>` : ""}
+      ${p || c.weekly ? `<div class="tags">${projectPill(p)}${c.weekly ? `<span class="pill" style="color:var(--accent);background:var(--accent-soft)" title="Каждую неделю: в понедельник вернётся в «В работе»">${icon("repeat", 11)} неделя</span>` : ""}</div>` : ""}
       <div class="title">${esc(c.title)}</div>
       ${c.status === "waiting" && c.waitingFor ? `<div class="wait">Ждём: ${esc(c.waitingFor)}</div>` : ""}
       <div class="meta">
@@ -398,7 +399,7 @@ function renderModal() {
 
   const history = [...c.history].reverse().map((h) => {
     const by = person(h.by);
-    const what = h.from ? `${COLUMN_BY_ID[h.from]?.name || h.from} → <b>${COLUMN_BY_ID[h.to]?.name || h.to}</b>` : `создана в «${COLUMN_BY_ID[h.to]?.name || h.to}»`;
+    const what = h.from ? `${statusName(h.from)} → <b>${statusName(h.to)}</b>` : `создана в «${statusName(h.to)}»`;
     return `<li><span class="when">${humanDateTime(h.at)}</span><span>${by ? esc(by.name) : h.note ? "" : "кто-то"}${h.note ? esc(h.note) : ""}: ${what}</span></li>`;
   }).join("");
 
@@ -450,7 +451,7 @@ function renderModal() {
             <input type="date" data-field="due" value="${c.due || ""}" style="width:100%" />
           </div>
         </div>
-        <label class="check"><input type="checkbox" data-field="weekly" ${c.weekly ? "checked" : ""} /><span>Повторять каждую неделю<span class="muted" style="display:block;font-weight:500;font-size:12.5px">в понедельник сама вернётся из «Готово» в «К работе»</span></span></label>
+        <label class="check"><input type="checkbox" data-field="weekly" ${c.weekly ? "checked" : ""} /><span>Повторять каждую неделю<span class="muted" style="display:block;font-weight:500;font-size:12.5px">в понедельник сама вернётся из «Готово» в «В работе»</span></span></label>
 
         <span class="label">Описание</span>
         <textarea class="desc" data-field="desc" placeholder="Детали, ссылки, критерии готовности">${esc(c.desc)}</textarea>
@@ -583,9 +584,9 @@ document.addEventListener("click", async (e) => {
     return render();
   }
   if (t.id === "new-card") {
-    state.quickAddColumn = "todo";
+    state.quickAddColumn = "doing";
     render();
-    return document.querySelector('[data-column="todo"]').scrollIntoView({ inline: "center", behavior: "smooth" });
+    return document.querySelector('[data-column="doing"]').scrollIntoView({ inline: "center", behavior: "smooth" });
   }
   if (t.dataset.quickOpen) {
     state.quickAddColumn = t.dataset.quickOpen;
