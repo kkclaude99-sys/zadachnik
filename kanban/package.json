@@ -1,0 +1,12 @@
+{
+  "name": "zadachnik-kanban",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Задачник-канбан команды «Море трафика»",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "import-old": "node scripts/import-supabase.js"
+  },
+  "engines": { "node": ">=18" }
+}
